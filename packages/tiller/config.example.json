@@ -1,0 +1,9 @@
+{
+  "hubUrl": "https://tiller.example.com",
+  "publicHub": false,
+  "namespace": "my-laptop",
+  "clientId": "<cf-access-client-id>",
+  "clientSecret": "<cf-access-client-secret>",
+  "localRunnerImage": "docker.io/jamieatlason/tiller-sandbox:stable",
+  "skipCodexSubscriptionPrompt": false
+}

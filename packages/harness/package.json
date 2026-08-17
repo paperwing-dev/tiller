@@ -1,0 +1,46 @@
+{
+  "name": "@paperwing-dev/tiller-harness",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "version": "0.4.4",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "bin": {
+    "tiller-harness": "dist/index.js",
+    "tiller-plan": "dist/plan-command.js",
+    "tiller-planner": "dist/planner/main.js",
+    "tiller-plan-writer": "dist/plan-writer/main.js",
+    "tiller-plan-writer-hook": "dist/plan-writer/hook.js",
+    "tiller-plan-writer-codex-notify": "dist/plan-writer/codex-notify.js",
+    "tiller-plan-writer-plans-mcp": "dist/plan-writer/plans-mcp.js",
+    "tiller-codex-app-server-runtime": "dist/codex-interactive-runtime.js",
+    "tiller-codex-auth-helper": "dist/codex-auth-helper-cli.js",
+    "tiller-opencode-config": "dist/opencode-config-cli.js"
+  },
+  "scripts": {
+    "cli": "tsx src/index.ts",
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@xterm/headless": "6.0.0",
+    "ws": "8.21.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "@types/ws": "8.18.1",
+    "tsx": "^4.23.8",
+    "typescript": "^7.0.2"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "smoke/opencode-image-smoke.mjs"
+  ]
+}

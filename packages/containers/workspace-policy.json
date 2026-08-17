@@ -1,0 +1,21 @@
+{
+  "runtimeExcludes": [
+    "node_modules",
+    ".git",
+    "__pycache__",
+    ".DS_Store",
+    ".terraform",
+    "vendor",
+    "dist",
+    ".next",
+    "build"
+  ],
+  "runtimeExactFiles": [
+    "/.claude/settings.local.json",
+    "/core"
+  ],
+  "envOnlyCanonicalExcludes": [
+    "/.tiller",
+    "/.claude/settings.local.json"
+  ]
+}

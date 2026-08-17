@@ -1,0 +1,42 @@
+{
+  "name": "@paperwing-dev/tiller",
+  "version": "0.4.2",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "bin": {
+    "tiller": "dist/index.js"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "cli": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "attach": "tsx src/index.ts",
+    "host": "tsx src/index.ts host",
+    "host:install-service": "tsx src/index.ts host install-service",
+    "init": "npm run build && node dist/index.js init",
+    "setup": "tsx src/index.ts setup",
+    "doctor": "tsx src/index.ts doctor",
+    "status": "tsx src/index.ts status",
+    "down": "tsx src/index.ts down",
+    "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsc",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "tsx": "^4.23.8",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "jose": "^6.2.8"
+  },
+  "files": [
+    "dist"
+  ]
+}

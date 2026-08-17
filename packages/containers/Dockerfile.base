@@ -1,0 +1,105 @@
+FROM ubuntu:24.04
+
+ARG OPENCODE_VERSION=1.18.18
+
+# --- Base Layer 1: System deps (rarely changes) ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl unzip ca-certificates tini zstd bubblewrap strace \
+    && bwrap --version \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Base Layer 2: Node.js 22 (rarely changes) ---
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Base Layer 3: User + env setup (rarely changes) ---
+RUN useradd -m -s /bin/bash tiller \
+    && mkdir -p /home/tiller/.config /home/tiller/.claude \
+    && echo '{"hasCompletedOnboarding":true,"bypassPermissionsModeAccepted":true,"projects":{"/workspace":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true,"allowedTools":[]}}}' > /home/tiller/.claude.json \
+    && echo '{"skipDangerousModePermissionPrompt":true}' > /home/tiller/.claude/settings.json \
+    && mkdir -p /home/tiller/.codex \
+    && printf '%s\n' \
+        'model = "gpt-5.6-sol"' \
+        'model_reasoning_effort = "xhigh"' \
+        '' \
+        '# BEGIN TILLER MANAGED CODEX PROJECT TRUST' \
+        '[projects."/workspace"]' \
+        'trust_level = "trusted"' \
+        '# END TILLER MANAGED CODEX PROJECT TRUST' \
+        > /home/tiller/.codex/config.toml \
+    && chown -R tiller:tiller /home/tiller/.config /home/tiller/.claude /home/tiller/.claude.json /home/tiller/.codex \
+    && mkdir -p /workspace && chown tiller:tiller /workspace
+
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+ENV DISABLE_AUTOUPDATER=1
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
+ENV NODE_OPTIONS="--dns-result-order=ipv4first"
+
+# --- Base Layer 4: Claude Code CLI (changes on CLI releases) ---
+RUN npm install -g @anthropic-ai/claude-code@2.1.224
+
+# --- Base Layer 5: Codex CLI (changes on CLI releases) ---
+# The Plan Writer consumes experimental app-server fields. Fail the image
+# build if the pinned binary no longer generates the protocol surface used by
+# the checked-in adapter.
+COPY verify-codex-reviewer-contract.sh /tmp/verify-codex-reviewer-contract.sh
+RUN npm install -g @openai/codex@0.147.0 \
+    && codex --version | grep -Fq 'codex-cli 0.147.0' \
+    && rm -rf /tmp/tiller-codex-app-server-bindings \
+    && codex app-server generate-ts --experimental --out /tmp/tiller-codex-app-server-bindings \
+    && grep -Fq '"method": "account/login/start"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "account/read"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "account/chatgptAuthTokens/refresh"' /tmp/tiller-codex-app-server-bindings/ServerRequest.ts \
+    && grep -Fq '{ "type": "chatgptAuthTokens",' /tmp/tiller-codex-app-server-bindings/v2/LoginAccountParams.ts \
+    && grep -Fq 'chatgptPlanType?: string | null' /tmp/tiller-codex-app-server-bindings/v2/LoginAccountParams.ts \
+    && grep -Fq 'chatgptPlanType: string | null' /tmp/tiller-codex-app-server-bindings/v2/ChatgptAuthTokensRefreshResponse.ts \
+    && grep -Fq '"method": "thread/start"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "thread/settings/update"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "thread/inject_items"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "thread/resume"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "thread/read"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "turn/interrupt"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "turn/start"' /tmp/tiller-codex-app-server-bindings/ClientRequest.ts \
+    && grep -Fq '"method": "turn/completed"' /tmp/tiller-codex-app-server-bindings/ServerNotification.ts \
+    && grep -Fq 'collaborationMode?: CollaborationMode' /tmp/tiller-codex-app-server-bindings/v2/ThreadSettingsUpdateParams.ts \
+    && grep -Fq 'collaborationMode: CollaborationMode' /tmp/tiller-codex-app-server-bindings/v2/ThreadSettings.ts \
+    && grep -Fq '"method": "thread/settings/updated"' /tmp/tiller-codex-app-server-bindings/ServerNotification.ts \
+    && grep -Fq '{ "type": "readOnly", networkAccess: boolean' /tmp/tiller-codex-app-server-bindings/v2/SandboxPolicy.ts \
+    && grep -Fq 'approvalPolicy: AskForApproval' /tmp/tiller-codex-app-server-bindings/v2/ThreadResumeResponse.ts \
+    && grep -Fq 'export type ThreadHistoryMode = "legacy" | "paginated";' /tmp/tiller-codex-app-server-bindings/v2/ThreadHistoryMode.ts \
+    && grep -Fq '{ "type": "plan", id: string, text: string' /tmp/tiller-codex-app-server-bindings/v2/ThreadItem.ts \
+    && bash /tmp/verify-codex-reviewer-contract.sh /tmp/tiller-codex-app-server-bindings \
+    && rm -rf /tmp/tiller-codex-app-server-bindings /tmp/verify-codex-reviewer-contract.sh
+
+# --- Base Layer 6: OpenCode CLI (changes on CLI releases) ---
+RUN npm install -g opencode-ai@${OPENCODE_VERSION} \
+    && test "$(opencode --version)" = "${OPENCODE_VERSION}" \
+    && opencode run --help 2>&1 | grep -q -- "--format"
+
+# --- Base Layer 7: OpenCode seed (changes on OpenCode releases) ---
+# Pre-warm generic OpenCode directories so brand-new envs do not all pay the
+# first-run path setup and legacy JSON-storage migration checks. Runtime copies
+# these only when each target directory is empty.
+RUN SEED_HOME=/tmp/opencode-seed-home \
+    && SEED_ROOT=/opt/opencode-seed \
+    && rm -rf "$SEED_HOME" "$SEED_ROOT" \
+    && mkdir -p "$SEED_HOME" "$SEED_HOME/workspace" "$SEED_ROOT/data" "$SEED_ROOT/cache" "$SEED_ROOT/state" \
+    && (HOME="$SEED_HOME" \
+        OPENCODE_DISABLE_AUTOUPDATE=1 \
+        OPENCODE_DISABLE_MODELS_FETCH=1 \
+        OPENCODE_CONFIG_CONTENT='{"$schema":"https://opencode.ai/config.json","autoupdate":false,"share":"disabled"}' \
+        opencode debug paths >/tmp/opencode-prewarm.log 2>&1 || true) \
+    && mkdir -p \
+        "$SEED_HOME/.local/share/opencode/storage" \
+        "$SEED_HOME/.cache/opencode" \
+        "$SEED_HOME/.local/state/opencode" \
+    && printf '1' > "$SEED_HOME/.local/share/opencode/storage/migration" \
+    && rm -rf "$SEED_HOME/.local/share/opencode/log" "$SEED_HOME/.local/share/opencode/storage/project" "$SEED_HOME/workspace" \
+    && find "$SEED_HOME/.local/share/opencode" "$SEED_HOME/.cache/opencode" "$SEED_HOME/.local/state/opencode" \
+        -type f \( -name '*.log' -o -name '*.lock' -o -name 'LOCK' \) -delete \
+    && cp -R "$SEED_HOME/.local/share/opencode/." "$SEED_ROOT/data/" \
+    && cp -R "$SEED_HOME/.cache/opencode/." "$SEED_ROOT/cache/" \
+    && cp -R "$SEED_HOME/.local/state/opencode/." "$SEED_ROOT/state/" \
+    && chown -R tiller:tiller "$SEED_ROOT" \
+    && rm -rf "$SEED_HOME" /tmp/opencode-prewarm.log
