@@ -1,5 +1,7 @@
 # Hub deployment scripts
 
+**This README is AI-generated.**
+
 Fresh Hub installation is owned by `packages/installer`. The canonical Hub
 release exports and scans the approved monorepo tree, publishes one synthetic
 snapshot to `paperwing-dev/tiller`, and builds every release artifact from that

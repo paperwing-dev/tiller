@@ -1,5 +1,7 @@
 # Agent Core Tests
 
+**This README is AI-generated.**
+
 This folder contains tests for the hosted-agent harness retained by the
 unrouted `ReviewerChatAgent`.
 

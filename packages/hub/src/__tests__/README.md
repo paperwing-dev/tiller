@@ -1,5 +1,7 @@
 # Frontend Tests
 
+**This README is AI-generated.**
+
 This folder contains grouped frontend unit tests for Tiller Hub.
 
 ## Purpose

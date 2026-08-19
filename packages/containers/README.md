@@ -1,5 +1,7 @@
 # Tiller Containers
 
+**This README is AI-generated.**
+
 Docker images and startup scripts for Tiller's isolated coding-agent environments.
 
 This package is used by both Cloudflare Containers and `tiller host` Docker

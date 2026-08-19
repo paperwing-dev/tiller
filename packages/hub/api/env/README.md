@@ -1,5 +1,7 @@
 # Environment API
 
+**This README is AI-generated.**
+
 This folder contains environment lifecycle and runner backend logic.
 
 ## Purpose

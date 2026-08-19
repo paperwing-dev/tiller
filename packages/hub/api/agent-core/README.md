@@ -1,5 +1,7 @@
 # Agent Core
 
+**This README is AI-generated.**
+
 This folder contains the hosted-agent harness retained for the unrouted legacy
 `ReviewerChatAgent`.
 

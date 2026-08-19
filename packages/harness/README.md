@@ -1,5 +1,7 @@
 # Tiller Harness
 
+**This README is AI-generated.**
+
 `tiller-harness` runs inside a Tiller environment. It connects to the Tiller
 Hub, creates a session, starts the selected coding agent in a PTY, and relays
 terminal I/O between the agent and connected Tiller clients.

@@ -1,5 +1,7 @@
 # Voice
 
+**This README is AI-generated.**
+
 This folder contains the voice-specific transport and agent code.
 
 ## Purpose

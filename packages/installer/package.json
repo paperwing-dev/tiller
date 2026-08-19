@@ -1,6 +1,6 @@
 {
   "name": "@paperwing/tiller-installer",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "license": "AGPL-3.0-or-later",
   "private": true,
   "type": "module",

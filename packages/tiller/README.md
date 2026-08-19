@@ -1,5 +1,7 @@
 # Tiller CLI
 
+**This README is AI-generated.**
+
 Local CLI for connecting to a Tiller Hub and preparing an optional execution
 machine.
 

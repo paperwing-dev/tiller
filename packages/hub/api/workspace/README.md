@@ -1,5 +1,7 @@
 # Workspace
 
+**This README is AI-generated.**
+
 This folder contains the hosted workspace storage layer and the routes that expose it.
 
 ## Purpose

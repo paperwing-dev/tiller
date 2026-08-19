@@ -1,5 +1,7 @@
 # API Tests
 
+**This README is AI-generated.**
+
 This folder contains grouped tests for top-level API domains.
 
 ## Purpose

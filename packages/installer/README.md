@@ -1,5 +1,7 @@
 # Tiller installer
 
+**This README is AI-generated.**
+
 `install.paperwing.dev` is the OAuth lifecycle service for installer-managed
 Tiller Hubs. Its public lifecycle endpoints are `GET /deploy`,
 `GET /maintenance?intent=update|renew`, and `GET /stable`.

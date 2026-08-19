@@ -1,5 +1,7 @@
 # Tiller Hub
 
+**This README is AI-generated.**
+
 Tiller Hub is the main Tiller application and control plane. It runs in your
 Cloudflare account, manages coding-agent sessions, and executes workloads in
 Cloudflare Containers or on a connected machine.

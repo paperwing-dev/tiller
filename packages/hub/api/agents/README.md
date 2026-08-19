@@ -1,5 +1,7 @@
 # Agents
 
+**This README is AI-generated.**
+
 This folder contains hosted chat agent classes retained by Tiller.
 
 ## Retained Agents
