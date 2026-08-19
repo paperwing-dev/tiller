@@ -66,9 +66,22 @@ export const PUBLIC_EXPORT_ROOTS = Object.freeze([
   "public",
   "scripts",
 ]);
+const privateRepositorySlug =
+  /(?<!@)\b(?:jamieatlason\/tiller|paperwing-dev\/tiller-private-source-network)(?:\.git)?(?=$|[\s"'`/])/;
+const sandboxBaseBuildInputs = new Set([
+  ".github/workflows/container-image.yml",
+  "packages/containers/Dockerfile.base",
+  "packages/containers/verify-codex-reviewer-contract.sh",
+]);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function publicGitEnvironment() {
+  const token = process.env.TILLER_PUBLIC_PUSH_TOKEN?.trim();
+  assert(token, "Public repository push token is missing.");
+  return { ...process.env, GH_TOKEN: token };
 }
 
 export function parseReleaseBump(args = []) {
@@ -138,9 +151,10 @@ async function result(command, args, options = {}) {
   }
 }
 
-async function remoteRefSha(cwd, remote, ref) {
+async function remoteRefSha(cwd, remote, ref, options = {}) {
   const value = await output("git", ["ls-remote", "--refs", remote, ref], {
     cwd,
+    env: options.env,
   });
   const sha = value.split(/\s+/)[0] ?? "";
   return sha40.test(sha) ? sha : null;
@@ -379,7 +393,9 @@ async function listFiles(directory) {
 export function isApprovedPublicPath(pathname) {
   const normalized = String(pathname ?? "").replace(/^\.\//, "");
   if (!normalized || normalized.includes("\0")) return false;
-  return PUBLIC_EXPORT_ROOTS.includes(normalized.split("/")[0]);
+  const segments = normalized.split("/");
+  if (segments.includes("..")) return false;
+  return PUBLIC_EXPORT_ROOTS.includes(segments[0]);
 }
 
 export function publicSnapshotCommitArgs({
@@ -391,6 +407,10 @@ export function publicSnapshotCommitArgs({
   if (!resetPublicHistory) args.push("-p", publicBase);
   args.push("-m", "chore(release): publish generated snapshot");
   return args;
+}
+
+export function containsPrivateRepositorySlug(value) {
+  return privateRepositorySlug.test(String(value ?? ""));
 }
 
 export async function scanExportedSnapshot({ directory, forbiddenShas = [] }) {
@@ -412,6 +432,9 @@ export async function scanExportedSnapshot({ directory, forbiddenShas = [] }) {
     const text = bytes.toString("utf8");
     for (const sha of forbiddenShas.filter(Boolean)) {
       if (text.includes(sha)) findings.push(`${relative}: private commit SHA`);
+    }
+    if (containsPrivateRepositorySlug(text)) {
+      findings.push(`${relative}: private repository slug`);
     }
   }
   assert(
@@ -592,7 +615,7 @@ async function assertCanPushPublicRepository() {
         "origin",
         "HEAD:refs/heads/main",
       ],
-      { cwd: probeDirectory },
+      { cwd: probeDirectory, env: publicGitEnvironment() },
     );
   } finally {
     await rm(probeDirectory, { recursive: true, force: true });
@@ -748,11 +771,9 @@ async function exportPublicSnapshot({
     ? publicBase
     : await output("git", commitArgs, { cwd: publicDirectory });
   if (releaseId !== publicBase) {
-    await run(
-      "git",
-      ["update-ref", "refs/heads/main", releaseId, publicBase],
-      { cwd: publicDirectory },
-    );
+    await run("git", ["update-ref", "refs/heads/main", releaseId, publicBase], {
+      cwd: publicDirectory,
+    });
   }
   const commitLine = await output(
     "git",
@@ -811,6 +832,7 @@ async function pushReleaseCommits({
     publicDirectory,
     "origin",
     "refs/heads/main",
+    { env: publicGitEnvironment() },
   );
   if (currentPublic !== publicRelease) {
     assert(
@@ -829,14 +851,15 @@ async function pushReleaseCommits({
         "origin",
         `${publicRelease}:refs/heads/main`,
       ],
-      { cwd: publicDirectory },
+      { cwd: publicDirectory, env: publicGitEnvironment() },
     );
   }
   const privateMain = await remoteRefSha(repoRoot, "origin", "refs/heads/main");
   assert(privateMain === expectedPrivateMain, "Private main did not advance.");
   assert(
-    (await remoteRefSha(publicDirectory, "origin", "refs/heads/main")) ===
-      publicRelease,
+    (await remoteRefSha(publicDirectory, "origin", "refs/heads/main", {
+      env: publicGitEnvironment(),
+    })) === publicRelease,
     "Public main did not advance.",
   );
   return publicRelease;
@@ -867,6 +890,10 @@ export function canReuseReleaseImages({
   successfulRun,
 }) {
   return Boolean(sandboxImage && scmImage && successfulRun);
+}
+
+export function requiresSandboxBaseRebuild(changedFiles = []) {
+  return changedFiles.some((pathname) => sandboxBaseBuildInputs.has(pathname));
 }
 
 async function hasSuccessfulImageRun(releaseId, requestId) {
@@ -916,11 +943,7 @@ async function buildReleaseImages({ releaseId, changedFiles }) {
     };
   }
 
-  const rebuildBase = changedFiles.some(
-    (pathname) =>
-      pathname === "packages/containers/Dockerfile.base" ||
-      pathname === ".github/workflows/container-image.yml",
-  );
+  const rebuildBase = requiresSandboxBaseRebuild(changedFiles);
   await run("gh", [
     "workflow",
     "run",
@@ -935,6 +958,10 @@ async function buildReleaseImages({ releaseId, changedFiles }) {
     `rebuild_base=${rebuildBase ? "true" : "false"}`,
     "-f",
     `request_id=${requestId}`,
+    "-f",
+    `source_revision=${releaseId}`,
+    "-f",
+    `image_revision=${releaseId}`,
   ]);
   let runId = "";
   for (let attempt = 0; attempt < 60 && !runId; attempt += 1) {
@@ -1125,7 +1152,9 @@ async function buildReleaseArtifacts({
     TILLER_BUILD_VERSION: version,
     TILLER_PUBLIC_RELEASE_ID: releaseId,
     TILLER_SELF_HOST_RUNTIME_IMAGE: images.sandboxImage,
-    TILLER_REVIEWER_ISOLATION_PROTOCOL: String(images.reviewerIsolationProtocol),
+    TILLER_REVIEWER_ISOLATION_PROTOCOL: String(
+      images.reviewerIsolationProtocol,
+    ),
     TILLER_REQUIRE_RELEASE_INFO: "1",
     CONTAINER_IMAGE_TAG: images.sandboxImage,
     GITHUB_JOB_IMAGE_TAG: images.scmImage,

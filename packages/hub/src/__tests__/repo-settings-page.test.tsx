@@ -13,9 +13,9 @@ function repoMeta(overrides: Partial<RepoMeta> = {}): RepoMeta {
   const repo: RepoMeta = {
     repoId: "repo-1",
     artifactStoreGeneration: null,
-    repoUrl: "https://github.com/paperwing-dev/tiller",
+    repoUrl: "https://github.com/example/private-repo",
     githubInstallationId: 123,
-    githubFullName: "paperwing-dev/tiller",
+    githubFullName: "example/private-repo",
     ...createInitialRepoScmState(),
     githubDefaultBranch: "main",
     githubDefaultBranchHeadSha: "abc123",
@@ -81,7 +81,7 @@ describe("RepoSettingsPage", () => {
     );
 
     expect(html).toContain("Repository Settings");
-    expect(html).toContain("paperwing-dev/tiller");
+    expect(html).toContain("example/private-repo");
     expect(html).toContain("Task variables");
     expect(html).not.toContain("Cloudflare MCP");
     expect(html).not.toContain("Unavailable");

@@ -34,6 +34,7 @@ async function loadReleaseModule() {
       scmImage: string | null;
       successfulRun: boolean;
     }): boolean;
+    containsPrivateRepositorySlug(value: string): boolean;
     githubRepositoryFromRemoteUrl(value: string): string | null;
     isApprovedPublicPath(pathname: string): boolean;
     lookupGitHubReleaseCoordinate(input: {
@@ -56,6 +57,7 @@ async function loadReleaseModule() {
       publicBase: string;
       resetPublicHistory?: boolean;
     }): string[];
+    requiresSandboxBaseRebuild(changedFiles?: string[]): boolean;
     scanExportedSnapshot(input: {
       directory: string;
       forbiddenShas?: string[];
@@ -100,6 +102,19 @@ describe("release orchestration safety helpers", () => {
     expect(source).toContain("WORKERS_CI_COMMIT_SHA: releaseId");
     expect(source).toContain("credential.helper=!gh auth git-credential");
     expect(source).toContain('"public-push-probe"');
+    expect(source).toContain("TILLER_PUBLIC_PUSH_TOKEN");
+    expect(source).toContain("publicGitEnvironment()");
+    expect(source).not.toContain("TILLER_SOURCE_TOKEN");
+    expect(source).not.toContain("sourceGitEnvironment()");
+    expect(source).toContain('const publicRepository = "paperwing-dev/tiller"');
+    expect(source).toContain("export const PUBLIC_EXPORT_ROOTS");
+    expect(source).not.toContain('"--strip-components=2"');
+    expect(source).toContain(
+      'const installerDirectory = path.join(\n    publicDirectory,\n    "packages",\n    "installer",',
+    );
+    expect(source).toContain("async function buildAndTestPublicTree()");
+    expect(source).toContain("`source_revision=${releaseId}`");
+    expect(source).toContain("env: options.env");
     expect(source).toContain('"commit-tree"');
     expect(source).toContain("currentMatchesSnapshot");
     expect(source).toContain('"-p"');
@@ -156,6 +171,8 @@ describe("release orchestration safety helpers", () => {
       "GH_TOKEN: ${{ secrets.TILLER_RELEASE_TOKEN }}",
     );
     expect(source).toContain("uses: docker/login-action@v4");
+    expect(source).toContain("repositories: tiller");
+    expect(source).not.toContain("TILLER_SOURCE_TOKEN");
   });
 
   it("reserves stable image promotion for the coordinated release", async () => {
@@ -164,6 +181,13 @@ describe("release orchestration safety helpers", () => {
     expect(source).toContain('default: "manual"');
     expect(source).toContain('if [[ "$IMAGE_TAG" == "stable" ]]');
     expect(source).not.toContain('default: "stable"');
+    expect(source).toContain("source_revision:");
+    expect(source).toContain("image_revision:");
+    expect(source).toContain("IMAGE_REVISION:");
+    expect(source).toContain(
+      "ref: ${{ inputs.source_revision || github.sha }}",
+    );
+    expect(source).toContain("TILLER_IMAGE_COMMIT=${{ env.IMAGE_REVISION }}");
   });
 
   it("recognizes the public mirror from common GitHub remote URLs", async () => {
@@ -213,6 +237,25 @@ describe("release orchestration safety helpers", () => {
     ).toBe(true);
   });
 
+  it("rebuilds the sandbox base for every declared base build input", async () => {
+    const { requiresSandboxBaseRebuild } = await loadReleaseModule();
+
+    expect(
+      requiresSandboxBaseRebuild([
+        "packages/containers/verify-codex-reviewer-contract.sh",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresSandboxBaseRebuild(["packages/containers/Dockerfile.base"]),
+    ).toBe(true);
+    expect(
+      requiresSandboxBaseRebuild([".github/workflows/container-image.yml"]),
+    ).toBe(true);
+    expect(requiresSandboxBaseRebuild(["packages/containers/Dockerfile"])).toBe(
+      false,
+    );
+  });
+
   it("resumes one unfinished release even when a fix follows it", async () => {
     const { parsePendingReleaseLog } = await loadReleaseModule();
     const releaseCommit = "a".repeat(40);
@@ -257,13 +300,18 @@ describe("release orchestration safety helpers", () => {
     ).rejects.toThrow("HTTP 403");
   });
 
-  it("allows only the generated mirror export roots", async () => {
+  it("allows only the approved monorepo export roots", async () => {
     const { isApprovedPublicPath } = await loadReleaseModule();
 
     expect(isApprovedPublicPath("packages/hub/package.json")).toBe(true);
+    expect(isApprovedPublicPath("packages/tiller/package.json")).toBe(true);
     expect(isApprovedPublicPath(".github/workflows/release.yml")).toBe(true);
+    expect(isApprovedPublicPath("scripts/release.mjs")).toBe(true);
     expect(isApprovedPublicPath(".env.production")).toBe(false);
     expect(isApprovedPublicPath("internal/secrets.txt")).toBe(false);
+    expect(isApprovedPublicPath("packages/hub/../tiller/package.json")).toBe(
+      false,
+    );
   });
 
   it("keeps normal public snapshots linear and supports an explicit root reset", async () => {
@@ -312,6 +360,50 @@ describe("release orchestration safety helpers", () => {
     await expect(
       scanExportedSnapshot({ directory, forbiddenShas: [privateSha] }),
     ).rejects.toThrow("Public snapshot safety scan failed");
+  });
+
+  it("rejects exact private repository slugs without blocking public monorepo or package references", async () => {
+    const { containsPrivateRepositorySlug, scanExportedSnapshot } =
+      await loadReleaseModule();
+    const privateRepository = [
+      "https://github.com",
+      "jamieatlason",
+      "tiller",
+    ].join("/");
+    const privateSourceNetwork = [
+      "https://github.com",
+      "paperwing-dev",
+      "tiller-private-source-network",
+    ].join("/");
+    expect(
+      containsPrivateRepositorySlug("https://github.com/paperwing-dev/tiller"),
+    ).toBe(false);
+    expect(containsPrivateRepositorySlug(privateRepository)).toBe(true);
+    expect(containsPrivateRepositorySlug(privateSourceNetwork)).toBe(true);
+    expect(
+      containsPrivateRepositorySlug(
+        "https://github.com/paperwing-dev/tiller-hub",
+      ),
+    ).toBe(false);
+    expect(
+      containsPrivateRepositorySlug("npm install @paperwing-dev/tiller@latest"),
+    ).toBe(false);
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "tiller-release-private-repository-scan-"),
+    );
+    temporaryDirectories.push(directory);
+    await writeFile(
+      path.join(directory, "package.json"),
+      JSON.stringify({
+        privateRepository,
+        publicRepository: "https://github.com/paperwing-dev/tiller",
+        publicPackage: "@paperwing-dev/tiller@latest",
+      }),
+    );
+
+    await expect(scanExportedSnapshot({ directory })).rejects.toThrow(
+      "private repository slug",
+    );
   });
 
   it("rejects private commit identifiers from generated release output", async () => {

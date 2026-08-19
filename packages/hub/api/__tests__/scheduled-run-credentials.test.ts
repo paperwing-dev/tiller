@@ -37,7 +37,7 @@ describe("Scheduled Run credential scopes", () => {
         incarnationId: "incarnation-1",
         startOpId: "start-a",
       },
-      githubFullName: "paperwing-dev/tiller",
+      githubFullName: "example/private-repo",
     });
     const second = await createGitHubBridgeRecord(env, {
       subject: {
@@ -46,7 +46,7 @@ describe("Scheduled Run credential scopes", () => {
         incarnationId: "incarnation-1",
         startOpId: "start-b",
       },
-      githubFullName: "paperwing-dev/tiller",
+      githubFullName: "example/private-repo",
     });
 
     await revokeGitHubBridgesForEnvironmentStart(env, {

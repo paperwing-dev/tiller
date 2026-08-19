@@ -12,7 +12,7 @@ on:
           - patch
           - minor
       reset_public_history:
-        description: Publish the next public snapshot as a new root commit
+        description: Start public main at a new root; old tags and releases remain
         required: true
         type: boolean
         default: false
@@ -70,6 +70,7 @@ jobs:
         env:
           TILLER_RELEASE_BUMP: ${{ inputs.bump }}
           TILLER_RESET_PUBLIC_HISTORY: ${{ inputs.reset_public_history }}
+          TILLER_PUBLIC_PUSH_TOKEN: ${{ secrets.TILLER_RELEASE_TOKEN }}
           GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

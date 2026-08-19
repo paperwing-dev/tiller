@@ -1,6 +1,6 @@
 # Tiller
 
-Tiller is our personalized vibe coding platform built with Cloudflare primitives. It recreates the portions of Claude Code and Codex that we find useful, and adds more control and observability. Use your Claude Code/ Codex subscriptions, run on your own server or Cloudflare Containers, and customize however you like.
+Tiller is our personalized vibe coding platform built with Cloudflare primitives. Think of it as a terminal sessions manager for remote coding agents. Use your Claude Code/ Codex subscriptions, run on your own server or Cloudflare Containers, and customize however you like.
 
 ## Getting Started
 
@@ -17,7 +17,7 @@ It's working pretty well though. Give it a whirl.
 
 ## Tiller CLI
 
-While we mainly develop through the Tiller Hub, you can also use the Tiller CLI from a local terminal. This allow for connecting to "implementor" TUI's directly, and authenticating Codex and Claude subscriptions.
+The Tiller CLI can be used to authenticate Codex and Claude subscriptions, and allows for connecting directly to remote terminal sessions.
 
 1. `npm install -g @paperwing-dev/tiller`
 2. Run `tiller` to connect to the Hub.
@@ -26,21 +26,19 @@ While we mainly develop through the Tiller Hub, you can also use the Tiller CLI 
 
 ## Q and A
 
-### Why Am I Directed To install.paperwing.dev?
+### Tiller vs Cloudflare OS
 
-You only interact with paperwing.dev during the install and update. Onboarding would have been a large UX pain otherwise, and a pre-registered callback URL is required for Cloudflare OAuth. There is no tracking in the app. It's all on your personal Cloudflare account beside this check, and updates.
+Tiller is focused on managing remote terminals, while Cloudflare OS owns the agent loop itself. Tiller's main benefits are organizing all your remote terminal sessions, making it easier to pass context between all of them, and an opinionated workflow.
 
-### Why Cloudflare?
-
-Workers are a great fit for vibe coded apps, and they provide a lot of primitives for building whatever. @korinne also works there.
+If you don't use subscriptions or care about running terminal based coding agents, Cloudflare OS is a better place to start. If you need that functionality, Tiller is a Cloudflare version of a tool like [Agent Deck](https://github.com/asheshgoplani/agent-deck) with our UX choices.
 
 ### Can Multiple Users Connect to the Hub?
 
 Tiller is meant for only a single user. The subscription terms for OpenAI and Anthropic are explicit about this, and we haven't handled any of the security concerns associated with multiple users.
 
-### Why Use Containers for Planning/ Review Flows?
+### Why Am I Directed To install.paperwing.dev?
 
-Original versions of this app used a worker and implemented our own minimal planning and review harnesses for the "chat reviewers". This is a cleaner solution that saves on container costs, and is architecturally simpler. However Claude subscriptions only work with Claude Code, and we still need that functionality for now. Also for large codebases, a container performed better, but this may have changed.
+You only interact with paperwing.dev during the install and update. Onboarding would have been a large UX pain otherwise, and a pre-registered callback URL is required for Cloudflare OAuth. There is no tracking in the app. It's all on your personal Cloudflare account beside this check, and updates.
 
 ## Contributing/ License
 

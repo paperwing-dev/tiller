@@ -18,6 +18,16 @@ on:
         required: false
         default: ""
         type: string
+      source_revision:
+        description: "Immutable monorepo commit to build."
+        required: false
+        default: ""
+        type: string
+      image_revision:
+        description: "Immutable public release id used for image tags and metadata."
+        required: false
+        default: ""
+        type: string
   workflow_dispatch:
     inputs:
       image_tag:
@@ -39,12 +49,23 @@ on:
         required: false
         default: ""
         type: string
+      source_revision:
+        description: "Immutable monorepo commit to build."
+        required: false
+        default: ""
+        type: string
+      image_revision:
+        description: "Immutable public release id used for image tags and metadata."
+        required: false
+        default: ""
+        type: string
 
 env:
   SANDBOX_IMAGE: docker.io/jamieatlason/tiller-sandbox
   SANDBOX_BASE_IMAGE: docker.io/jamieatlason/tiller-sandbox-base
   SANDBOX_CACHE_IMAGE: ghcr.io/${{ github.repository_owner }}/tiller-sandbox-cache
   SANDBOX_BASE_CACHE_IMAGE: ghcr.io/${{ github.repository_owner }}/tiller-sandbox-base-cache
+  IMAGE_REVISION: ${{ inputs.image_revision || github.sha }}
 
 jobs:
   validate_image_tag:
@@ -55,7 +76,16 @@ jobs:
         shell: bash
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision || github.sha }}
         run: |
+          if [[ ! "$IMAGE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_revision must be a lowercase 40-character git SHA" >&2
+            exit 1
+          fi
+          if [[ ! "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_revision must be a lowercase 40-character git SHA" >&2
+            exit 1
+          fi
           if [[ "$IMAGE_TAG" == "stable" ]]; then
             echo "stable is promoted only by the coordinated release workflow" >&2
             exit 1
@@ -68,6 +98,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
 
       - uses: actions/setup-node@v5
         with:
@@ -132,6 +164,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -155,7 +189,7 @@ jobs:
           file: packages/containers/Dockerfile.base
           platforms: linux/amd64
           push: true
-          tags: ${{ env.SANDBOX_BASE_IMAGE }}:${{ github.sha }}-amd64
+          tags: ${{ env.SANDBOX_BASE_IMAGE }}:${{ env.IMAGE_REVISION }}-amd64
           cache-from: type=registry,ref=${{ env.SANDBOX_BASE_CACHE_IMAGE }}:amd64
           cache-to: type=registry,ref=${{ env.SANDBOX_BASE_CACHE_IMAGE }}:amd64,mode=max
 
@@ -168,6 +202,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -191,7 +227,7 @@ jobs:
           file: packages/containers/Dockerfile.base
           platforms: linux/arm64
           push: true
-          tags: ${{ env.SANDBOX_BASE_IMAGE }}:${{ github.sha }}-arm64
+          tags: ${{ env.SANDBOX_BASE_IMAGE }}:${{ env.IMAGE_REVISION }}-arm64
           cache-from: type=registry,ref=${{ env.SANDBOX_BASE_CACHE_IMAGE }}:arm64
           cache-to: type=registry,ref=${{ env.SANDBOX_BASE_CACHE_IMAGE }}:arm64,mode=max
 
@@ -217,10 +253,10 @@ jobs:
         shell: bash
         run: |
           docker buildx imagetools create \
-            -t "${SANDBOX_BASE_IMAGE}:${GITHUB_SHA}" \
+            -t "${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}" \
             -t "${SANDBOX_BASE_IMAGE}:${{ inputs.image_tag }}" \
-            "${SANDBOX_BASE_IMAGE}:${GITHUB_SHA}-amd64" \
-            "${SANDBOX_BASE_IMAGE}:${GITHUB_SHA}-arm64"
+            "${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}-amd64" \
+            "${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}-arm64"
 
   build_sandbox_amd64:
     needs:
@@ -261,7 +297,7 @@ jobs:
         run: |
           base_channel_tag="${SANDBOX_BASE_IMAGE}:${{ inputs.image_tag }}"
           if [[ "${{ needs.detect_sandbox_base.outputs.rebuild_base }}" == "true" ]]; then
-            base_tag="${SANDBOX_BASE_IMAGE}:${GITHUB_SHA}"
+            base_tag="${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}"
           elif docker buildx imagetools inspect "$base_channel_tag" >/dev/null 2>&1; then
             base_tag="$base_channel_tag"
           else
@@ -285,10 +321,10 @@ jobs:
           file: sandbox-context/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ env.SANDBOX_IMAGE }}:${{ github.sha }}-amd64
+          tags: ${{ env.SANDBOX_IMAGE }}:${{ env.IMAGE_REVISION }}-amd64
           build-args: |
             BASE_IMAGE_REF=${{ steps.resolve_base.outputs.base_ref }}
-            TILLER_IMAGE_COMMIT=${{ github.sha }}
+            TILLER_IMAGE_COMMIT=${{ env.IMAGE_REVISION }}
             TILLER_REVIEWER_ISOLATION_PROTOCOL=1
           cache-from: type=registry,ref=${{ env.SANDBOX_CACHE_IMAGE }}:amd64
           cache-to: type=registry,ref=${{ env.SANDBOX_CACHE_IMAGE }}:amd64,mode=max
@@ -297,9 +333,9 @@ jobs:
         timeout-minutes: 10
         shell: bash
         run: |
-          docker pull "${SANDBOX_IMAGE}:${GITHUB_SHA}-amd64"
-          test "$(docker image inspect --format '{{ index .Config.Labels "dev.tiller.reviewer-isolation-protocol" }}' "${SANDBOX_IMAGE}:${GITHUB_SHA}-amd64")" = "1"
-          docker run --rm --entrypoint bash "${SANDBOX_IMAGE}:${GITHUB_SHA}-amd64" -lc '
+          docker pull "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64"
+          test "$(docker image inspect --format '{{ index .Config.Labels "dev.tiller.reviewer-isolation-protocol" }}' "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64")" = "1"
+          docker run --rm --entrypoint bash "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64" -lc '
             set -euo pipefail
             test "$(uname -m)" = "x86_64"
             test "$(cat /etc/tiller-reviewer-isolation-protocol)" = "1"
@@ -309,7 +345,7 @@ jobs:
           '
           docker run --rm --network none --user tiller --env RUNNER_BACKEND=host --entrypoint node \
             --volume "${PWD}/sandbox-context/codex-reviewer-smoke.mjs:/tmp/codex-reviewer-smoke.mjs:ro" \
-            "${SANDBOX_IMAGE}:${GITHUB_SHA}-amd64" \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64" \
             /tmp/codex-reviewer-smoke.mjs
           chmod +x sandbox-context/reviewer-entrypoint-smoke.mjs
           for reviewer_harness in claude-code codex opencode; do
@@ -319,10 +355,10 @@ jobs:
               --env TILLER_REVIEWER_ISOLATION_PROTOCOL=1 \
               --env TILLER_HARNESS="$reviewer_harness" \
               --volume "${PWD}/sandbox-context/reviewer-entrypoint-smoke.mjs:/usr/local/bin/tiller-planner:ro" \
-              "${SANDBOX_IMAGE}:${GITHUB_SHA}-amd64"
+              "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64"
           done
           docker run --rm --network none --user tiller --entrypoint bash \
-            "${SANDBOX_IMAGE}:${GITHUB_SHA}-amd64" -lc '
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64" -lc '
               set -euo pipefail
               harness_root="$(npm root --global)/@paperwing-dev/tiller-harness"
               TILLER_PINNED_OPENCODE_BIN=/usr/bin/opencode \
@@ -369,7 +405,7 @@ jobs:
         run: |
           base_channel_tag="${SANDBOX_BASE_IMAGE}:${{ inputs.image_tag }}"
           if [[ "${{ needs.detect_sandbox_base.outputs.rebuild_base }}" == "true" ]]; then
-            base_tag="${SANDBOX_BASE_IMAGE}:${GITHUB_SHA}"
+            base_tag="${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}"
           elif docker buildx imagetools inspect "$base_channel_tag" >/dev/null 2>&1; then
             base_tag="$base_channel_tag"
           else
@@ -393,10 +429,10 @@ jobs:
           file: sandbox-context/Dockerfile
           platforms: linux/arm64
           push: true
-          tags: ${{ env.SANDBOX_IMAGE }}:${{ github.sha }}-arm64
+          tags: ${{ env.SANDBOX_IMAGE }}:${{ env.IMAGE_REVISION }}-arm64
           build-args: |
             BASE_IMAGE_REF=${{ steps.resolve_base.outputs.base_ref }}
-            TILLER_IMAGE_COMMIT=${{ github.sha }}
+            TILLER_IMAGE_COMMIT=${{ env.IMAGE_REVISION }}
             TILLER_REVIEWER_ISOLATION_PROTOCOL=1
           cache-from: type=registry,ref=${{ env.SANDBOX_CACHE_IMAGE }}:arm64
           cache-to: type=registry,ref=${{ env.SANDBOX_CACHE_IMAGE }}:arm64,mode=max
@@ -405,9 +441,9 @@ jobs:
         timeout-minutes: 10
         shell: bash
         run: |
-          docker pull "${SANDBOX_IMAGE}:${GITHUB_SHA}-arm64"
-          test "$(docker image inspect --format '{{ index .Config.Labels "dev.tiller.reviewer-isolation-protocol" }}' "${SANDBOX_IMAGE}:${GITHUB_SHA}-arm64")" = "1"
-          docker run --rm --entrypoint bash "${SANDBOX_IMAGE}:${GITHUB_SHA}-arm64" -lc '
+          docker pull "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64"
+          test "$(docker image inspect --format '{{ index .Config.Labels "dev.tiller.reviewer-isolation-protocol" }}' "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64")" = "1"
+          docker run --rm --entrypoint bash "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64" -lc '
             set -euo pipefail
             test "$(uname -m)" = "aarch64"
             test "$(cat /etc/tiller-reviewer-isolation-protocol)" = "1"
@@ -417,7 +453,7 @@ jobs:
           '
           docker run --rm --network none --user tiller --env RUNNER_BACKEND=host --entrypoint node \
             --volume "${PWD}/sandbox-context/codex-reviewer-smoke.mjs:/tmp/codex-reviewer-smoke.mjs:ro" \
-            "${SANDBOX_IMAGE}:${GITHUB_SHA}-arm64" \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64" \
             /tmp/codex-reviewer-smoke.mjs
           chmod +x sandbox-context/reviewer-entrypoint-smoke.mjs
           for reviewer_harness in claude-code codex opencode; do
@@ -427,10 +463,10 @@ jobs:
               --env TILLER_REVIEWER_ISOLATION_PROTOCOL=1 \
               --env TILLER_HARNESS="$reviewer_harness" \
               --volume "${PWD}/sandbox-context/reviewer-entrypoint-smoke.mjs:/usr/local/bin/tiller-planner:ro" \
-              "${SANDBOX_IMAGE}:${GITHUB_SHA}-arm64"
+              "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64"
           done
           docker run --rm --network none --user tiller --entrypoint bash \
-            "${SANDBOX_IMAGE}:${GITHUB_SHA}-arm64" -lc '
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64" -lc '
               set -euo pipefail
               harness_root="$(npm root --global)/@paperwing-dev/tiller-harness"
               TILLER_PINNED_OPENCODE_BIN=/usr/bin/opencode \
@@ -459,14 +495,14 @@ jobs:
         shell: bash
         run: |
           docker buildx imagetools create \
-            -t "${SANDBOX_IMAGE}:${GITHUB_SHA}" \
+            -t "${SANDBOX_IMAGE}:${IMAGE_REVISION}" \
             -t "${SANDBOX_IMAGE}:${{ inputs.image_tag }}" \
-            "${SANDBOX_IMAGE}:${GITHUB_SHA}-amd64" \
-            "${SANDBOX_IMAGE}:${GITHUB_SHA}-arm64"
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64" \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64"
 
       - name: Verify sandbox manifest
         shell: bash
-        run: docker buildx imagetools inspect "${SANDBOX_IMAGE}:${GITHUB_SHA}"
+        run: docker buildx imagetools inspect "${SANDBOX_IMAGE}:${IMAGE_REVISION}"
 
   build_scm_bootstrap:
     needs: validate_image_tag
@@ -476,6 +512,8 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
 
       - uses: docker/setup-qemu-action@v4
 
@@ -496,6 +534,6 @@ jobs:
           push: true
           tags: |
             docker.io/jamieatlason/tiller-scm:${{ inputs.image_tag }}
-            docker.io/jamieatlason/tiller-scm:${{ github.sha }}
+            docker.io/jamieatlason/tiller-scm:${{ env.IMAGE_REVISION }}
           cache-from: type=gha,scope=tiller-scm
           cache-to: type=gha,mode=max,scope=tiller-scm

@@ -75,7 +75,7 @@ describe("ReleaseDescriptorV1 generator", () => {
       version: "0.3.0",
       configPath,
       bundlePath,
-      bundleUrl: "https://github.com/paperwing-dev/tiller/releases/download/v0.3.0/tiller.tar.gz",
+      bundleUrl: "https://github.com/example/release-mirror/releases/download/v0.3.0/tiller.tar.gz",
       sandboxImage: `docker.io/example/tiller-sandbox@sha256:${DIGEST_ONE}`,
       scmImage: `docker.io/example/tiller-scm@sha256:${DIGEST_ONE}`,
       ...overrides,

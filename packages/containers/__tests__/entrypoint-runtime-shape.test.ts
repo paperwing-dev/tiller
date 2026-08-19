@@ -668,7 +668,9 @@ describe("entrypoint runtime shape", () => {
     expect(source).toContain("workflow_call:");
     expect(source).toContain("Build and pack tiller-harness from this commit");
     expect(source).toContain("npm pack --workspace packages/harness");
-    expect(source).toContain("TILLER_IMAGE_COMMIT=${{ github.sha }}");
+    expect(source).toContain(
+      "TILLER_IMAGE_COMMIT=${{ env.IMAGE_REVISION }}",
+    );
     expect(source).not.toContain("harness_version");
     expect(source).toContain(
       'if [[ "${{ inputs.rebuild_base }}" == "true" ]]; then',
