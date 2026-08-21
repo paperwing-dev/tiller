@@ -1,0 +1,38 @@
+{
+  "name": "tiller",
+  "private": true,
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "bootstrap:dev": "bash scripts/bootstrap-maintainer-dev.sh",
+    "deploy:dev": "bash scripts/deploy-dev.sh",
+    "release": "node scripts/release.mjs",
+    "deploy:dev:update-host": "npm run deploy:dev",
+    "update-host:local-env": "bash scripts/update-self-host-dev.sh",
+    "build": "lerna run build --sort",
+    "test": "lerna run test --stream --concurrency 2",
+    "dev": "lerna run dev --parallel --stream",
+    "format": "prettier --write '**/*.{js,jsx,ts,tsx,css,json,md}' --ignore-path .gitignore",
+    "typecheck": "npm run build-input --workspace packages/installer && tsc -b --noEmit packages/tiller packages/harness packages/installer"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "lerna": "^10.0.0",
+    "nx": "^23.1.1",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.8",
+    "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "@hono/node-server": "2.1.0",
+    "brace-expansion": "5.0.9",
+    "fast-uri": "3.1.5",
+    "js-yaml": "4.3.1",
+    "miniflare": {
+      "undici": "7.29.0"
+    },
+    "tar": "7.5.22"
+  }
+}

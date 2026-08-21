@@ -1,0 +1,60 @@
+name: Hub Checks
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  hub-api-production-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck Hub production API
+        run: npm run typecheck:api:production --workspace packages/hub
+
+  hub-ui-production-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck Hub production UI
+        run: npm run typecheck:ui:production --workspace packages/hub
+
+  hub-tests-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test Hub
+        run: npm test --workspace packages/hub
+
+      - name: Build Hub
+        run: npm run build --workspace packages/hub

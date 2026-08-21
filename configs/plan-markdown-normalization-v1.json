@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "empty",
+      "input": "",
+      "canonical": ""
+    },
+    {
+      "name": "spaces-only",
+      "input": "   ",
+      "canonical": ""
+    },
+    {
+      "name": "tabs-only",
+      "input": "\t",
+      "canonical": ""
+    },
+    {
+      "name": "single-line",
+      "input": "# Plan",
+      "canonical": "# Plan\n"
+    },
+    {
+      "name": "crlf-and-terminal-blank-lines",
+      "input": "# Plan\r\n\r\nBody  \r\n \t\r\n",
+      "canonical": "# Plan\n\nBody  \n"
+    },
+    {
+      "name": "leading-blank-line",
+      "input": "\n# Plan\n\n",
+      "canonical": "\n# Plan\n"
+    },
+    {
+      "name": "content-trailing-spaces",
+      "input": "Body  ",
+      "canonical": "Body  \n"
+    }
+  ]
+}

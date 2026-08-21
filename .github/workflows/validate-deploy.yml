@@ -1,0 +1,36 @@
+name: Validate Deploy Images
+run-name: Validate deploy ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Validation image channel tag."
+        required: false
+        default: "deploy"
+        type: string
+      rebuild_base:
+        description: "Force a sandbox base-image rebuild."
+        required: false
+        default: false
+        type: boolean
+      upstream_ref:
+        description: "Upstream ref validated by the deploy script."
+        required: true
+        type: string
+      request_id:
+        description: "Deploy script request id."
+        required: true
+        type: string
+
+jobs:
+  images:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/container-image.yml
+    with:
+      image_tag: ${{ inputs.image_tag }}
+      rebuild_base: ${{ inputs.rebuild_base }}
+      request_id: ${{ inputs.request_id }}
+    secrets: inherit

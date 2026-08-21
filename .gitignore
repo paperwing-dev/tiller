@@ -1,0 +1,80 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Wrangler
+.wrangler
+.dev.vars
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+lerna-debug.log*
+
+# IDE
+.idea
+.playwright-mcp/
+.vscode-test
+
+# TypeScript
+*.tsbuildinfo
+
+# Coverage
+coverage/
+.nyc_output/
+
+# OS
+.DS_Store
+
+# Tiller config (user-specific)
+packages/tiller/config.self-host.json
+
+# Personal planning notes
+.local-docs/
+/plans-to-do/
+
+# Local agent skills
+/.agents/
+
+# Local preview output
+/.tmp-settings-preview/
+/.tmp-workflow-preview/
+
+# Internal documentation
+/docs/
+/packages/*/docs/
+
+# Archived internal prototypes
+/packages/*/_archived/
+/packages/*/archived/
+
+# Local Hub plan exports and migration records
+.tiller-plans/
+
+# Self-host config and generated state
+.tiller-dev-bootstrap.json
+.tiller-maintainer-dev.env
+.update-self-host-dev.local.env
+.update-self-host-deploy-record.json
+.tiller-hub-build.lock
+
+# Generated release artifacts
+/packages/hub/release-descriptor.json
+/packages/installer/stable-release.generated.json
+/.release/
+
+# Legacy self-host state filenames
+.update-self-host-deployed.json
+.update-self-host-local-env.json
+.update-self-host-local-cache.json
+
+# npm auth (written by release scripts with package-registry token)
+.npmrc
+.npmrc.bak

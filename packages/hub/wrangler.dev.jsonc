@@ -1,0 +1,111 @@
+{
+	"name": "tiller-hub",
+	"main": "api/index.ts",
+	"compatibility_date": "2025-01-29",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"assets": {
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"directory": "./dist/client"
+	},
+	"ai": {
+		"binding": "AI"
+	},
+	"worker_loaders": [
+		{
+			"binding": "LOADER"
+		}
+	],
+	"vars": {
+		"LOCAL_DEV_ONLY_BACKEND": "true",
+		"TILLER_LOCAL_DEV_ORIGIN": "http://localhost:5173",
+		"TILLER_TERMINAL_METRICS": "1"
+	},
+	"containers": [
+		{
+			"class_name": "CodexAuthDO",
+			"image": "docker.io/jamieatlason/tiller-sandbox:stable",
+			"max_instances": 1,
+			"instance_type": "basic"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "SCHEDULED_RUN_CAPACITY",
+				"class_name": "ScheduledRunCapacityDO"
+			},
+			{
+				"name": "ENV_LIFECYCLE",
+				"class_name": "EnvLifecycleDO"
+			},
+			{
+				"name": "ARTIFACT_STORE",
+				"class_name": "ArtifactStoreDO"
+			},
+			{
+				"name": "HUB",
+				"class_name": "HubDO"
+			},
+			{
+				"name": "CODEX_AUTH",
+				"class_name": "CodexAuthDO"
+			},
+			{
+				"name": "SANDBOX",
+				"class_name": "SandboxDO"
+			},
+			{
+				"name": "TILLER_VOICE",
+				"class_name": "TillerVoice"
+			},
+			{
+				"name": "GITHUB_JOB",
+				"class_name": "GitHubJobDO"
+			},
+			{
+				"name": "THREAD",
+				"class_name": "ThreadDO"
+			},
+			{
+				"name": "WORKSPACE",
+				"class_name": "WorkspaceDO"
+			},
+			{
+				"name": "REVIEWER_CHAT",
+				"class_name": "ReviewerChatAgent"
+			}
+			]
+		},
+	"exports": {
+		"ScheduledRunCapacityDO": { "type": "durable-object", "storage": "sqlite" },
+		"EnvLifecycleDO": { "type": "durable-object", "storage": "sqlite" },
+		"ArtifactStoreDO": { "type": "durable-object", "storage": "sqlite" },
+		"HubDO": { "type": "durable-object", "storage": "sqlite" },
+		"CodexAuthDO": { "type": "durable-object", "storage": "sqlite" },
+		"SandboxDO": { "type": "durable-object", "storage": "sqlite" },
+		"TillerVoice": { "type": "durable-object", "storage": "sqlite" },
+		"GitHubJobDO": { "type": "durable-object", "storage": "sqlite" },
+		"ThreadDO": { "type": "durable-object", "storage": "sqlite" },
+		"WorkspaceDO": { "type": "durable-object", "storage": "sqlite" },
+		"ReviewerChatAgent": { "type": "durable-object", "storage": "sqlite" }
+	},
+	"r2_buckets": [
+		{
+			"binding": "BUCKET"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "ENVS_KV"
+		},
+	],
+	"workers_dev": true,
+	"send_metrics": false,
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	}
+}

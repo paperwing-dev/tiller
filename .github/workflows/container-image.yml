@@ -1,0 +1,539 @@
+name: Build and Push Container Images
+run-name: Container images ${{ inputs.request_id }}
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Image channel tag to update alongside the immutable git SHA tag."
+        required: true
+        type: string
+      rebuild_base:
+        description: "Force a sandbox base-image rebuild."
+        required: false
+        default: false
+        type: boolean
+      request_id:
+        description: "Caller-provided id used to find the run from scripts."
+        required: false
+        default: ""
+        type: string
+      source_revision:
+        description: "Immutable monorepo commit to build."
+        required: false
+        default: ""
+        type: string
+      image_revision:
+        description: "Immutable public release id used for image tags and metadata."
+        required: false
+        default: ""
+        type: string
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image channel tag to update alongside the immutable git SHA tag."
+        required: false
+        default: "manual"
+        type: choice
+        options:
+          - manual
+          - deploy
+          - release-candidate
+      rebuild_base:
+        description: "Force a sandbox base-image rebuild."
+        required: false
+        default: false
+        type: boolean
+      request_id:
+        description: "Caller-provided id used to find the run from scripts."
+        required: false
+        default: ""
+        type: string
+      source_revision:
+        description: "Immutable monorepo commit to build."
+        required: false
+        default: ""
+        type: string
+      image_revision:
+        description: "Immutable public release id used for image tags and metadata."
+        required: false
+        default: ""
+        type: string
+
+env:
+  SANDBOX_IMAGE: docker.io/jamieatlason/tiller-sandbox
+  SANDBOX_BASE_IMAGE: docker.io/jamieatlason/tiller-sandbox-base
+  SANDBOX_CACHE_IMAGE: ghcr.io/${{ github.repository_owner }}/tiller-sandbox-cache
+  SANDBOX_BASE_CACHE_IMAGE: ghcr.io/${{ github.repository_owner }}/tiller-sandbox-base-cache
+  IMAGE_REVISION: ${{ inputs.image_revision || github.sha }}
+
+jobs:
+  validate_image_tag:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Reserve stable for coordinated release promotion
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision || github.sha }}
+        run: |
+          if [[ ! "$IMAGE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_revision must be a lowercase 40-character git SHA" >&2
+            exit 1
+          fi
+          if [[ ! "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_revision must be a lowercase 40-character git SHA" >&2
+            exit 1
+          fi
+          if [[ "$IMAGE_TAG" == "stable" ]]; then
+            echo "stable is promoted only by the coordinated release workflow" >&2
+            exit 1
+          fi
+
+  prepare_sandbox_context:
+    needs: validate_image_tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and pack tiller-harness from this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build --workspace packages/harness
+          rm -rf .sandbox-context
+          mkdir -p .sandbox-context
+          find packages/containers -maxdepth 1 -type f -exec cp {} .sandbox-context/ \;
+          package_name="$(npm pack --workspace packages/harness --pack-destination .sandbox-context)"
+          mv ".sandbox-context/${package_name}" .sandbox-context/tiller-harness.tgz
+          tar -czf sandbox-context.tgz -C .sandbox-context .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-context
+          path: sandbox-context.tgz
+          if-no-files-found: error
+
+  detect_sandbox_base:
+    needs: validate_image_tag
+    runs-on: ubuntu-latest
+    outputs:
+      rebuild_base: ${{ steps.detect.outputs.rebuild_base }}
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: detect
+        shell: bash
+        run: |
+          rebuild_base=false
+          base_channel_tag="${SANDBOX_BASE_IMAGE}:${{ inputs.image_tag }}"
+          if [[ "${{ inputs.rebuild_base }}" == "true" ]]; then
+            rebuild_base=true
+          elif ! docker buildx imagetools inspect "$base_channel_tag" >/dev/null 2>&1; then
+            rebuild_base=true
+          fi
+
+          echo "rebuild_base=$rebuild_base" >> "$GITHUB_OUTPUT"
+          echo "Sandbox base rebuild: $rebuild_base"
+
+  build_sandbox_base_amd64:
+    needs: detect_sandbox_base
+    if: needs.detect_sandbox_base.outputs.rebuild_base == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push sandbox base image (amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: packages/containers
+          file: packages/containers/Dockerfile.base
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.SANDBOX_BASE_IMAGE }}:${{ env.IMAGE_REVISION }}-amd64
+          cache-from: type=registry,ref=${{ env.SANDBOX_BASE_CACHE_IMAGE }}:amd64
+          cache-to: type=registry,ref=${{ env.SANDBOX_BASE_CACHE_IMAGE }}:amd64,mode=max
+
+  build_sandbox_base_arm64:
+    needs: detect_sandbox_base
+    if: needs.detect_sandbox_base.outputs.rebuild_base == 'true'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push sandbox base image (arm64)
+        uses: docker/build-push-action@v7
+        with:
+          context: packages/containers
+          file: packages/containers/Dockerfile.base
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.SANDBOX_BASE_IMAGE }}:${{ env.IMAGE_REVISION }}-arm64
+          cache-from: type=registry,ref=${{ env.SANDBOX_BASE_CACHE_IMAGE }}:arm64
+          cache-to: type=registry,ref=${{ env.SANDBOX_BASE_CACHE_IMAGE }}:arm64,mode=max
+
+  publish_sandbox_base_manifest:
+    needs:
+      - detect_sandbox_base
+      - build_sandbox_base_amd64
+      - build_sandbox_base_arm64
+    if: needs.detect_sandbox_base.outputs.rebuild_base == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish sandbox base manifest
+        shell: bash
+        run: |
+          docker buildx imagetools create \
+            -t "${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}" \
+            -t "${SANDBOX_BASE_IMAGE}:${{ inputs.image_tag }}" \
+            "${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}-amd64" \
+            "${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}-arm64"
+
+  build_sandbox_amd64:
+    needs:
+      - prepare_sandbox_context
+      - detect_sandbox_base
+      - publish_sandbox_base_manifest
+    if: ${{ always() && needs.prepare_sandbox_context.result == 'success' && needs.detect_sandbox_base.result == 'success' && (needs.publish_sandbox_base_manifest.result == 'success' || needs.publish_sandbox_base_manifest.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sandbox-context
+
+      - name: Extract sandbox build context
+        run: mkdir sandbox-context && tar -xzf sandbox-context.tgz -C sandbox-context
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: resolve_base
+        name: Resolve sandbox base
+        shell: bash
+        run: |
+          base_channel_tag="${SANDBOX_BASE_IMAGE}:${{ inputs.image_tag }}"
+          if [[ "${{ needs.detect_sandbox_base.outputs.rebuild_base }}" == "true" ]]; then
+            base_tag="${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}"
+          elif docker buildx imagetools inspect "$base_channel_tag" >/dev/null 2>&1; then
+            base_tag="$base_channel_tag"
+          else
+            base_tag="${SANDBOX_BASE_IMAGE}:stable"
+          fi
+
+          inspect_output="$(docker buildx imagetools inspect "$base_tag")"
+          digest="$(printf '%s\n' "$inspect_output" | awk '/Digest:/ { print $2; exit }')"
+          if [[ -z "$digest" ]]; then
+            echo "ERROR: could not resolve digest for $base_tag" >&2
+            exit 1
+          fi
+
+          echo "base_ref=${SANDBOX_BASE_IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved sandbox base: ${SANDBOX_BASE_IMAGE}@${digest}"
+
+      - name: Build and push sandbox image (amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: sandbox-context
+          file: sandbox-context/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.SANDBOX_IMAGE }}:${{ env.IMAGE_REVISION }}-amd64
+          build-args: |
+            BASE_IMAGE_REF=${{ steps.resolve_base.outputs.base_ref }}
+            TILLER_IMAGE_COMMIT=${{ env.IMAGE_REVISION }}
+            TILLER_REVIEWER_ISOLATION_PROTOCOL=1
+          cache-from: type=registry,ref=${{ env.SANDBOX_CACHE_IMAGE }}:amd64
+          cache-to: type=registry,ref=${{ env.SANDBOX_CACHE_IMAGE }}:amd64,mode=max
+
+      - name: Smoke test sandbox image (amd64)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          docker pull "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64"
+          test "$(docker image inspect --format '{{ index .Config.Labels "dev.tiller.reviewer-isolation-protocol" }}' "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64")" = "1"
+          docker run --rm --entrypoint bash "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64" -lc '
+            set -euo pipefail
+            test "$(uname -m)" = "x86_64"
+            test "$(cat /etc/tiller-reviewer-isolation-protocol)" = "1"
+            claude --version | grep -F "2.1.224"
+            codex --version | grep -F "0.147.0"
+            opencode --version | grep -F "1.18.18"
+          '
+          docker run --rm --network none --user tiller --env RUNNER_BACKEND=host --entrypoint node \
+            --volume "${PWD}/sandbox-context/codex-reviewer-smoke.mjs:/tmp/codex-reviewer-smoke.mjs:ro" \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64" \
+            /tmp/codex-reviewer-smoke.mjs
+          chmod +x sandbox-context/reviewer-entrypoint-smoke.mjs
+          for reviewer_harness in claude-code codex opencode; do
+            echo "Smoke testing reviewer entrypoint: ${reviewer_harness} (amd64)"
+            docker run --rm --network none \
+              --env TILLER_BOOTSTRAP_MODE=planner-run \
+              --env TILLER_REVIEWER_ISOLATION_PROTOCOL=1 \
+              --env TILLER_HARNESS="$reviewer_harness" \
+              --volume "${PWD}/sandbox-context/reviewer-entrypoint-smoke.mjs:/usr/local/bin/tiller-planner:ro" \
+              "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64"
+          done
+          docker run --rm --network none --user tiller --entrypoint bash \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64" -lc '
+              set -euo pipefail
+              harness_root="$(npm root --global)/@paperwing-dev/tiller-harness"
+              TILLER_PINNED_OPENCODE_BIN=/usr/bin/opencode \
+              TILLER_OPENCODE_TRACE_BIN=/usr/bin/strace \
+                node --test "$harness_root/smoke/opencode-image-smoke.mjs"
+            '
+
+  build_sandbox_arm64:
+    needs:
+      - prepare_sandbox_context
+      - detect_sandbox_base
+      - publish_sandbox_base_manifest
+    if: ${{ always() && needs.prepare_sandbox_context.result == 'success' && needs.detect_sandbox_base.result == 'success' && (needs.publish_sandbox_base_manifest.result == 'success' || needs.publish_sandbox_base_manifest.result == 'skipped') }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sandbox-context
+
+      - name: Extract sandbox build context
+        run: mkdir sandbox-context && tar -xzf sandbox-context.tgz -C sandbox-context
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: resolve_base
+        name: Resolve sandbox base
+        shell: bash
+        run: |
+          base_channel_tag="${SANDBOX_BASE_IMAGE}:${{ inputs.image_tag }}"
+          if [[ "${{ needs.detect_sandbox_base.outputs.rebuild_base }}" == "true" ]]; then
+            base_tag="${SANDBOX_BASE_IMAGE}:${IMAGE_REVISION}"
+          elif docker buildx imagetools inspect "$base_channel_tag" >/dev/null 2>&1; then
+            base_tag="$base_channel_tag"
+          else
+            base_tag="${SANDBOX_BASE_IMAGE}:stable"
+          fi
+
+          inspect_output="$(docker buildx imagetools inspect "$base_tag")"
+          digest="$(printf '%s\n' "$inspect_output" | awk '/Digest:/ { print $2; exit }')"
+          if [[ -z "$digest" ]]; then
+            echo "ERROR: could not resolve digest for $base_tag" >&2
+            exit 1
+          fi
+
+          echo "base_ref=${SANDBOX_BASE_IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved sandbox base: ${SANDBOX_BASE_IMAGE}@${digest}"
+
+      - name: Build and push sandbox image (arm64)
+        uses: docker/build-push-action@v7
+        with:
+          context: sandbox-context
+          file: sandbox-context/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.SANDBOX_IMAGE }}:${{ env.IMAGE_REVISION }}-arm64
+          build-args: |
+            BASE_IMAGE_REF=${{ steps.resolve_base.outputs.base_ref }}
+            TILLER_IMAGE_COMMIT=${{ env.IMAGE_REVISION }}
+            TILLER_REVIEWER_ISOLATION_PROTOCOL=1
+          cache-from: type=registry,ref=${{ env.SANDBOX_CACHE_IMAGE }}:arm64
+          cache-to: type=registry,ref=${{ env.SANDBOX_CACHE_IMAGE }}:arm64,mode=max
+
+      - name: Smoke test sandbox image (arm64)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          docker pull "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64"
+          test "$(docker image inspect --format '{{ index .Config.Labels "dev.tiller.reviewer-isolation-protocol" }}' "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64")" = "1"
+          docker run --rm --entrypoint bash "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64" -lc '
+            set -euo pipefail
+            test "$(uname -m)" = "aarch64"
+            test "$(cat /etc/tiller-reviewer-isolation-protocol)" = "1"
+            claude --version | grep -F "2.1.224"
+            codex --version | grep -F "0.147.0"
+            opencode --version | grep -F "1.18.18"
+          '
+          docker run --rm --network none --user tiller --env RUNNER_BACKEND=host --entrypoint node \
+            --volume "${PWD}/sandbox-context/codex-reviewer-smoke.mjs:/tmp/codex-reviewer-smoke.mjs:ro" \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64" \
+            /tmp/codex-reviewer-smoke.mjs
+          chmod +x sandbox-context/reviewer-entrypoint-smoke.mjs
+          for reviewer_harness in claude-code codex opencode; do
+            echo "Smoke testing reviewer entrypoint: ${reviewer_harness} (arm64)"
+            docker run --rm --network none \
+              --env TILLER_BOOTSTRAP_MODE=planner-run \
+              --env TILLER_REVIEWER_ISOLATION_PROTOCOL=1 \
+              --env TILLER_HARNESS="$reviewer_harness" \
+              --volume "${PWD}/sandbox-context/reviewer-entrypoint-smoke.mjs:/usr/local/bin/tiller-planner:ro" \
+              "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64"
+          done
+          docker run --rm --network none --user tiller --entrypoint bash \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64" -lc '
+              set -euo pipefail
+              harness_root="$(npm root --global)/@paperwing-dev/tiller-harness"
+              TILLER_PINNED_OPENCODE_BIN=/usr/bin/opencode \
+              TILLER_OPENCODE_TRACE_BIN=/usr/bin/strace \
+                node --test "$harness_root/smoke/opencode-image-smoke.mjs"
+            '
+
+  publish_sandbox_manifest:
+    needs:
+      - build_sandbox_amd64
+      - build_sandbox_arm64
+    if: ${{ always() && needs.build_sandbox_amd64.result == 'success' && needs.build_sandbox_arm64.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish sandbox manifest
+        shell: bash
+        run: |
+          docker buildx imagetools create \
+            -t "${SANDBOX_IMAGE}:${IMAGE_REVISION}" \
+            -t "${SANDBOX_IMAGE}:${{ inputs.image_tag }}" \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-amd64" \
+            "${SANDBOX_IMAGE}:${IMAGE_REVISION}-arm64"
+
+      - name: Verify sandbox manifest
+        shell: bash
+        run: docker buildx imagetools inspect "${SANDBOX_IMAGE}:${IMAGE_REVISION}"
+
+  build_scm_bootstrap:
+    needs: validate_image_tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
+
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push scm bootstrap image
+        uses: docker/build-push-action@v7
+        with:
+          context: packages/containers
+          file: packages/containers/Dockerfile.scm
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            docker.io/jamieatlason/tiller-scm:${{ inputs.image_tag }}
+            docker.io/jamieatlason/tiller-scm:${{ env.IMAGE_REVISION }}
+          cache-from: type=gha,scope=tiller-scm
+          cache-to: type=gha,mode=max,scope=tiller-scm

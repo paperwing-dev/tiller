@@ -1,0 +1,62 @@
+{
+  "name": "paperwing-tiller-installer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "install.paperwing.dev",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": false
+    }
+  },
+  "vars": {
+    "PUBLIC_ORIGIN": "https://install.paperwing.dev",
+    "OAUTH_REDIRECT_URI": "https://install.paperwing.dev/oauth/callback"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "INSTALL_JOB",
+        "class_name": "InstallJobDO"
+      },
+      {
+        "name": "ACCOUNT_LIFECYCLE",
+        "class_name": "AccountLifecycleDO"
+      }
+    ]
+  },
+  "ratelimits": [
+    {
+      "name": "INSTALL_START_LIMITER",
+      "namespace_id": "2026073001",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    }
+  ],
+  "exports": {
+    "InstallJobDO": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "AccountLifecycleDO": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}

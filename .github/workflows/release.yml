@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+      reset_public_history:
+        description: Start public main at a new root; old tags and releases remain
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ github.repository != 'paperwing-dev/tiller' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.TILLER_RELEASE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull pinned public-export scanner
+        run: >-
+          docker pull
+          docker.io/zricethezav/gitleaks@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854
+
+      - name: Install release dependencies
+        run: npm ci
+
+      - name: Mint public release token
+        id: release-app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.TILLER_RELEASE_APP_ID }}
+          private-key: ${{ secrets.TILLER_RELEASE_APP_PRIVATE_KEY }}
+          owner: paperwing-dev
+          repositories: tiller
+
+      - name: Release
+        env:
+          TILLER_RELEASE_BUMP: ${{ inputs.bump }}
+          TILLER_RESET_PUBLIC_HISTORY: ${{ inputs.reset_public_history }}
+          TILLER_PUBLIC_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run release -- --bump "$TILLER_RELEASE_BUMP"

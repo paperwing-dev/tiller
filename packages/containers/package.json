@@ -1,0 +1,12 @@
+{
+  "name": "tiller-containers",
+  "private": true,
+  "version": "0.4.10",
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}
