@@ -11,11 +11,6 @@ on:
         options:
           - patch
           - minor
-      reset_public_history:
-        description: Start public main at a new root; old tags and releases remain
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -26,14 +21,24 @@ concurrency:
 
 jobs:
   release:
-    if: ${{ github.repository != 'paperwing-dev/tiller' }}
+    if: ${{ github.repository == 'paperwing-dev/tiller' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    environment: production
     steps:
+      - name: Mint release token
+        id: release-app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.TILLER_RELEASE_APP_ID }}
+          private-key: ${{ secrets.TILLER_RELEASE_APP_PRIVATE_KEY }}
+          owner: paperwing-dev
+          repositories: tiller
+
       - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.TILLER_RELEASE_TOKEN }}
+          token: ${{ steps.release-app-token.outputs.token }}
 
       - uses: actions/setup-node@v5
         with:
@@ -49,28 +54,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Pull pinned public-export scanner
-        run: >-
-          docker pull
-          docker.io/zricethezav/gitleaks@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854
-
       - name: Install release dependencies
         run: npm ci
-
-      - name: Mint public release token
-        id: release-app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.TILLER_RELEASE_APP_ID }}
-          private-key: ${{ secrets.TILLER_RELEASE_APP_PRIVATE_KEY }}
-          owner: paperwing-dev
-          repositories: tiller
 
       - name: Release
         env:
           TILLER_RELEASE_BUMP: ${{ inputs.bump }}
-          TILLER_RESET_PUBLIC_HISTORY: ${{ inputs.reset_public_history }}
-          TILLER_PUBLIC_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
           GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
