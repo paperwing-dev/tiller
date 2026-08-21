@@ -1,15 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  cp,
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -36,7 +28,7 @@ const releaseRoot = path.join(
   process.env.RUNNER_TEMP?.trim() || tmpdir(),
   "tiller-release",
 );
-const publicDirectory = path.join(releaseRoot, "public");
+const releaseDirectory = path.join(releaseRoot, "source");
 const artifactsDirectory = path.join(releaseRoot, "artifacts");
 const publicRepository = "paperwing-dev/tiller";
 const stableRef = "refs/heads/tiller-release/stable";
@@ -48,40 +40,7 @@ const releaseCandidateNpmTag = "release-candidate";
 const sandboxRepository = "docker.io/jamieatlason/tiller-sandbox";
 const sandboxBaseRepository = "docker.io/jamieatlason/tiller-sandbox-base";
 const scmRepository = "docker.io/jamieatlason/tiller-scm";
-const gitleaksImage =
-  "docker.io/zricethezav/gitleaks@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854";
 const sha40 = /^[0-9a-f]{40}$/;
-
-export const PUBLIC_ROOT_COMMIT = Object.freeze({
-  subject: "Initial commit",
-  authorName: "Jamie Atlason",
-  authorEmail: "202176913+jamieatlason@users.noreply.github.com",
-  coAuthorName: "Korinne",
-  coAuthorEmail: "40270578+korinne@users.noreply.github.com",
-  committerName: "tiller-release[bot]",
-  committerEmail: "tiller-release[bot]@users.noreply.github.com",
-});
-export const PUBLIC_HISTORY_RESET = Object.freeze({
-  releaseVersion: "0.4.10",
-  previousMain: "d4d89d9aefaadf1a2fd4151346ed6082712599b5",
-});
-
-export const PUBLIC_EXPORT_ROOTS = Object.freeze([
-  ".github",
-  ".gitignore",
-  "CONTRIBUTING.md",
-  "LICENSE",
-  "README.md",
-  "configs",
-  "lerna.json",
-  "package-lock.json",
-  "package.json",
-  "packages",
-  "public",
-  "scripts",
-]);
-const privateRepositorySlug =
-  /(?<!@)\b(?:jamieatlason\/tiller|paperwing-dev\/tiller-private-source-network)(?:\.git)?(?=$|[\s"'`/])/;
 const sandboxBaseBuildInputs = new Set([
   ".github/workflows/container-image.yml",
   "packages/containers/Dockerfile.base",
@@ -90,12 +49,6 @@ const sandboxBaseBuildInputs = new Set([
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
-}
-
-function publicGitEnvironment() {
-  const token = process.env.TILLER_PUBLIC_PUSH_TOKEN?.trim();
-  assert(token, "Public repository push token is missing.");
-  return { ...process.env, GH_TOKEN: token };
 }
 
 export function parseReleaseBump(args = []) {
@@ -351,8 +304,8 @@ async function pendingReleaseAtHead(head, stable) {
     "Pending release commit contains changes outside release version files.",
   );
   return {
-    privateBase: parents[0],
-    privateRelease: candidate.commit,
+    releaseBase: parents[0],
+    releaseCommit: candidate.commit,
     releaseVersion: candidate.releaseVersion,
   };
 }
@@ -383,236 +336,28 @@ async function writeWorkspaceVersions(targetVersions) {
   });
 }
 
-async function trackedFiles(cwd, ref = "HEAD") {
-  return (await output("git", ["ls-tree", "-r", "--name-only", ref], { cwd }))
-    .split("\n")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-async function listFiles(directory) {
-  const files = [];
-  async function visit(current) {
-    for (const entry of await readdir(current, { withFileTypes: true })) {
-      if ([".git", "node_modules", "dist"].includes(entry.name)) continue;
-      const filePath = path.join(current, entry.name);
-      if (entry.isDirectory()) await visit(filePath);
-      else if (entry.isFile()) files.push(filePath);
-    }
-  }
-  await visit(directory);
-  return files;
-}
-
-export function isApprovedPublicPath(pathname) {
-  const normalized = String(pathname ?? "").replace(/^\.\//, "");
-  if (!normalized || normalized.includes("\0")) return false;
-  const segments = normalized.split("/");
-  if (segments.includes("..")) return false;
-  return PUBLIC_EXPORT_ROOTS.includes(segments[0]);
-}
-
-export function publicSnapshotCommitArgs({
-  desiredTree,
-  publicBase,
-  resetPublicHistory = false,
-}) {
-  const args = ["commit-tree", desiredTree];
-  if (!resetPublicHistory) args.push("-p", publicBase);
-  if (resetPublicHistory) {
-    args.push(
-      "-m",
-      PUBLIC_ROOT_COMMIT.subject,
-      "-m",
-      publicRootCommitTrailer(),
-    );
-  } else {
-    args.push("-m", "chore(release): publish generated snapshot");
-  }
-  return args;
-}
-
-function publicRootCommitTrailer() {
-  return `Co-authored-by: ${PUBLIC_ROOT_COMMIT.coAuthorName} <${PUBLIC_ROOT_COMMIT.coAuthorEmail}>`;
-}
-
-function publicRootCommitMessage() {
-  return `${PUBLIC_ROOT_COMMIT.subject}\n\n${publicRootCommitTrailer()}`;
-}
-
-export function publicSnapshotCommitEnvironment({
-  resetPublicHistory = false,
-  env = process.env,
-} = {}) {
-  if (!resetPublicHistory) return env;
-  return {
-    ...env,
-    GIT_AUTHOR_NAME: PUBLIC_ROOT_COMMIT.authorName,
-    GIT_AUTHOR_EMAIL: PUBLIC_ROOT_COMMIT.authorEmail,
-    GIT_COMMITTER_NAME: PUBLIC_ROOT_COMMIT.committerName,
-    GIT_COMMITTER_EMAIL: PUBLIC_ROOT_COMMIT.committerEmail,
-  };
-}
-
-export function matchesExpectedPublicRootCommit({
-  desiredTree,
-  tree,
-  parents,
-  authorName,
-  authorEmail,
-  committerName,
-  committerEmail,
-  message,
-}) {
-  return (
-    tree === desiredTree &&
-    String(parents ?? "").trim() === "" &&
-    authorName === PUBLIC_ROOT_COMMIT.authorName &&
-    authorEmail === PUBLIC_ROOT_COMMIT.authorEmail &&
-    committerName === PUBLIC_ROOT_COMMIT.committerName &&
-    committerEmail === PUBLIC_ROOT_COMMIT.committerEmail &&
-    String(message ?? "").trim() === publicRootCommitMessage()
-  );
-}
-
-export function assertPublicHistoryResetPlan({
-  resetPublicHistory = false,
-  bump,
-  plan,
-}) {
-  if (!resetPublicHistory) return;
-  assert(bump === "patch", "Public history reset requires a patch release.");
-  assert(
-    plan?.releaseVersion === PUBLIC_HISTORY_RESET.releaseVersion,
-    `Public history reset is restricted to v${PUBLIC_HISTORY_RESET.releaseVersion}.`,
-  );
-  assert(
-    plan.publishCli &&
-      RELEASE_WORKSPACE_KEYS.every(
-        (workspace) =>
-          plan.targetVersions?.[workspace] ===
-          PUBLIC_HISTORY_RESET.releaseVersion,
-      ),
-    "Public history reset requires every workspace, including the CLI, at v0.4.10.",
-  );
-}
-
-async function isExpectedPublicRootCommit({ commit, desiredTree }) {
-  const metadata = await output(
-    "git",
-    [
-      "show",
-      "-s",
-      "--format=%T%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%B",
-      commit,
-    ],
-    { cwd: publicDirectory },
-  );
-  const [
-    tree,
-    parents,
-    authorName,
-    authorEmail,
-    committerName,
-    committerEmail,
-    message,
-  ] = metadata.split("\0");
-  return matchesExpectedPublicRootCommit({
-    desiredTree,
-    tree,
-    parents,
-    authorName,
-    authorEmail,
-    committerName,
-    committerEmail,
-    message,
-  });
-}
-
-export function containsPrivateRepositorySlug(value) {
-  return privateRepositorySlug.test(String(value ?? ""));
-}
-
-export async function scanExportedSnapshot({ directory, forbiddenShas = [] }) {
-  const findings = [];
-  const sensitiveName =
-    /(^|\/)(?:\.env(?:\.|$)|id_(?:rsa|ed25519)$)|\.(?:pem|p12|pfx)$/i;
-  for (const filePath of await listFiles(directory)) {
-    const relative = path
-      .relative(directory, filePath)
-      .split(path.sep)
-      .join("/");
-    if (sensitiveName.test(relative)) {
-      findings.push(`${relative}: sensitive filename`);
-    }
-    const metadata = await stat(filePath);
-    if (metadata.size > 2 * 1024 * 1024) continue;
-    const bytes = await readFile(filePath);
-    if (bytes.includes(0)) continue;
-    const text = bytes.toString("utf8");
-    for (const sha of forbiddenShas.filter(Boolean)) {
-      if (text.includes(sha)) findings.push(`${relative}: private commit SHA`);
-    }
-    if (containsPrivateRepositorySlug(text)) {
-      findings.push(`${relative}: private repository slug`);
-    }
-  }
-  assert(
-    findings.length === 0,
-    `Public snapshot safety scan failed:\n${findings.map((entry) => `- ${entry}`).join("\n")}`,
-  );
-  await run("docker", [
-    "run",
-    "--rm",
-    "--mount",
-    `type=bind,src=${path.resolve(directory)},dst=/scan,readonly`,
-    gitleaksImage,
-    "dir",
-    "--no-banner",
-    "--redact",
-    "--exit-code",
-    "1",
-    "/scan",
-  ]);
-}
-
-export async function assertNoForbiddenText({ directory, forbidden = [] }) {
-  const values = forbidden.filter(Boolean).map((value) => Buffer.from(value));
-  if (values.length === 0) return;
-  const findings = [];
-  for (const filePath of await listFiles(directory)) {
-    const bytes = await readFile(filePath);
-    if (values.some((value) => bytes.includes(value))) {
-      findings.push(
-        path.relative(directory, filePath).split(path.sep).join("/"),
-      );
-    }
-  }
-  assert(
-    findings.length === 0,
-    `Release output contains private commit identifiers: ${findings.join(", ")}.`,
-  );
-}
-
-async function requireCleanPrivateMain() {
+async function requireCleanReleaseMain() {
   const originRepository = githubRepositoryFromRemoteUrl(
     await output("git", ["remote", "get-url", "origin"]),
   );
-  assert(originRepository, "origin must be a GitHub repository.");
   assert(
-    originRepository !== publicRepository.toLowerCase() &&
-      process.env.GITHUB_REPOSITORY?.toLowerCase() !==
+    originRepository === publicRepository.toLowerCase(),
+    `origin must be ${publicRepository}.`,
+  );
+  assert(
+    !process.env.GITHUB_REPOSITORY ||
+      process.env.GITHUB_REPOSITORY.toLowerCase() ===
         publicRepository.toLowerCase(),
-    `${publicRepository} is a generated mirror and cannot run releases.`,
+    `Release workflow must run in ${publicRepository}.`,
   );
   const dirty = await output("git", [
     "status",
     "--porcelain",
     "--untracked-files=all",
   ]);
-  assert(!dirty, "Release requires a clean private worktree.");
+  assert(!dirty, "Release requires a clean worktree.");
   const branch = await output("git", ["branch", "--show-current"]);
-  assert(branch === "main", "Release must run from private main.");
+  assert(branch === "main", "Release must run from main.");
   await run("git", [
     "fetch",
     "origin",
@@ -622,13 +367,16 @@ async function requireCleanPrivateMain() {
     output("git", ["rev-parse", "HEAD"]),
     output("git", ["rev-parse", "refs/remotes/origin/main"]),
   ]);
-  assert(head === remoteMain, "Private main must exactly match origin/main.");
+  assert(head === remoteMain, "Main must exactly match origin/main.");
   return head;
 }
 
 async function fetchStableBase() {
   const stable = await remoteRefSha(repoRoot, "origin", stableRef);
-  if (!stable) return null;
+  assert(
+    stable,
+    "tiller-release/stable is missing; seed it before the first public release.",
+  );
   await run("git", [
     "fetch",
     "origin",
@@ -645,7 +393,6 @@ async function fetchStableBase() {
 }
 
 async function changedFilesSinceStable(stable, head) {
-  if (!stable) return trackedFiles(repoRoot, head);
   return (await output("git", ["diff", "--name-only", `${stable}..${head}`]))
     .split("\n")
     .map((entry) => entry.trim())
@@ -708,43 +455,8 @@ async function readInstallerStable(url = installerVerificationUrl) {
   return value;
 }
 
-async function assertCanPushPublicRepository() {
-  const probeDirectory = path.join(releaseRoot, "public-push-probe");
-  await rm(probeDirectory, { recursive: true, force: true });
-  await mkdir(releaseRoot, { recursive: true });
-  try {
-    await run("git", [
-      "clone",
-      "--depth=1",
-      "--branch",
-      "main",
-      "--single-branch",
-      "--no-tags",
-      `https://github.com/${publicRepository}.git`,
-      probeDirectory,
-    ]);
-    await run(
-      "git",
-      [
-        "-c",
-        "credential.helper=",
-        "-c",
-        "credential.helper=!gh auth git-credential",
-        "push",
-        "--dry-run",
-        "origin",
-        "HEAD:refs/heads/main",
-      ],
-      { cwd: probeDirectory, env: publicGitEnvironment() },
-    );
-  } finally {
-    await rm(probeDirectory, { recursive: true, force: true });
-  }
-}
-
 async function preflightReleaseAccess() {
   await readInstallerStable();
-  await assertCanPushPublicRepository();
   await run("gh", [
     "workflow",
     "view",
@@ -779,7 +491,7 @@ async function preflightReleaseAccess() {
   );
 }
 
-async function commitPrivateRelease(plan) {
+async function commitRelease(plan) {
   await writeWorkspaceVersions(plan.targetVersions);
   await run("git", [
     "config",
@@ -811,200 +523,54 @@ async function commitPrivateRelease(plan) {
   return output("git", ["rev-parse", "HEAD"]);
 }
 
-async function exportPublicSnapshot({
-  privateBase,
-  privateRelease,
-  resetPublicHistory = false,
-}) {
+async function prepareReleaseTree(releaseCommit) {
   await run("git", [
     "clone",
-    "--depth=1",
-    "--branch",
-    "main",
-    "--single-branch",
+    "--no-checkout",
+    "--no-hardlinks",
     "--no-tags",
-    `https://github.com/${publicRepository}.git`,
-    publicDirectory,
-  ]);
-  const publicBase = await output("git", ["rev-parse", "HEAD"], {
-    cwd: publicDirectory,
-  });
-  const approved = (await trackedFiles(repoRoot, privateRelease)).filter(
-    isApprovedPublicPath,
-  );
-  assert(approved.length > 0, "Public export is empty.");
-  const archivePath = path.join(releaseRoot, "public-snapshot.tar");
-  await run("git", [
-    "archive",
-    "--format=tar",
-    `--output=${archivePath}`,
-    privateRelease,
-    "--",
-    ...approved,
-  ]);
-  await run("git", ["rm", "-r", "--ignore-unmatch", "."], {
-    cwd: publicDirectory,
-  });
-  await run("git", ["clean", "-fdx"], { cwd: publicDirectory });
-  await run("tar", ["-xf", archivePath, "-C", publicDirectory]);
-  await scanExportedSnapshot({
-    directory: publicDirectory,
-    forbiddenShas: [privateBase, privateRelease],
-  });
-  await run("git", ["add", "-A"], { cwd: publicDirectory });
-  await run(
-    "git",
-    [
-      "config",
-      "user.name",
-      process.env.GIT_AUTHOR_NAME || "tiller-release[bot]",
-    ],
-    { cwd: publicDirectory },
-  );
-  await run(
-    "git",
-    [
-      "config",
-      "user.email",
-      process.env.GIT_AUTHOR_EMAIL ||
-        "tiller-release[bot]@users.noreply.github.com",
-    ],
-    { cwd: publicDirectory },
-  );
-  const desiredTree = await output("git", ["write-tree"], {
-    cwd: publicDirectory,
-  });
-  const currentTree = await output(
-    "git",
-    ["rev-parse", `${publicBase}^{tree}`],
-    {
-      cwd: publicDirectory,
-    },
-  );
-  const currentMatchesSnapshot = desiredTree === currentTree;
-  const reusableResetRoot =
-    resetPublicHistory &&
-    currentMatchesSnapshot &&
-    (await isExpectedPublicRootCommit({
-      commit: publicBase,
-      desiredTree,
-    }));
-  if (resetPublicHistory) {
-    assert(
-      publicBase === PUBLIC_HISTORY_RESET.previousMain || reusableResetRoot,
-      `Public history reset expected main at ${PUBLIC_HISTORY_RESET.previousMain} or the completed v${PUBLIC_HISTORY_RESET.releaseVersion} root, not ${publicBase}.`,
-    );
-  }
-  const commitArgs = publicSnapshotCommitArgs({
-    desiredTree,
-    publicBase,
-    resetPublicHistory,
-  });
-  const releaseId =
-    currentMatchesSnapshot && (!resetPublicHistory || reusableResetRoot)
-      ? publicBase
-      : await output("git", commitArgs, {
-          cwd: publicDirectory,
-          env: publicSnapshotCommitEnvironment({ resetPublicHistory }),
-        });
-  if (releaseId !== publicBase) {
-    await run("git", ["update-ref", "refs/heads/main", releaseId, publicBase], {
-      cwd: publicDirectory,
-    });
-  }
-  const commitLine = await output(
-    "git",
-    ["rev-list", "--parents", "-n", "1", releaseId],
-    {
-      cwd: publicDirectory,
-    },
-  );
-  if (releaseId !== publicBase) {
-    const [, ...parents] = commitLine.split(/\s+/);
-    const expectedParents = resetPublicHistory ? [] : [publicBase];
-    assert(
-      parents.length === expectedParents.length &&
-        parents.every((parent, index) => parent === expectedParents[index]),
-      resetPublicHistory
-        ? "Reset public snapshot must be a root commit."
-        : "Public snapshot must descend from the previous public release.",
-    );
-  }
-  const commitBody = await output("git", ["cat-file", "commit", releaseId], {
-    cwd: publicDirectory,
-  });
-  assert(
-    !commitBody.includes(privateBase) && !commitBody.includes(privateRelease),
-    "Public snapshot commit leaks private history.",
-  );
-  assert(
-    !resetPublicHistory ||
-      (await isExpectedPublicRootCommit({ commit: releaseId, desiredTree })),
-    "Reset public snapshot does not match the required root commit.",
-  );
-  return { releaseId, publicBase };
-}
-
-async function buildAndTestPublicTree() {
-  await run("npm", ["ci"], { cwd: publicDirectory });
-  await run("npm", ["run", "build"], { cwd: publicDirectory });
-  await run("npm", ["run", "test"], { cwd: publicDirectory });
-}
-
-async function pushReleaseCommits({
-  privateBase,
-  privateRelease,
-  expectedPrivateMain,
-  publicBase,
-  publicRelease,
-}) {
-  const currentPrivate = await remoteRefSha(
     repoRoot,
-    "origin",
-    "refs/heads/main",
+    releaseDirectory,
+  ]);
+  await run(
+    "git",
+    ["-c", "advice.detachedHead=false", "checkout", "--detach", releaseCommit],
+    { cwd: releaseDirectory },
   );
-  if (currentPrivate !== expectedPrivateMain) {
-    assert(
-      expectedPrivateMain === privateRelease && currentPrivate === privateBase,
-      "Private main moved while preparing the release.",
-    );
-    await run("git", ["push", "origin", `${privateRelease}:refs/heads/main`]);
-  }
-  const currentPublic = await remoteRefSha(
-    publicDirectory,
-    "origin",
-    "refs/heads/main",
-    { env: publicGitEnvironment() },
-  );
-  if (currentPublic !== publicRelease) {
-    assert(
-      currentPublic === publicBase,
-      "Public main moved while preparing the release.",
-    );
-    await run(
-      "git",
-      [
-        "-c",
-        "credential.helper=",
-        "-c",
-        "credential.helper=!gh auth git-credential",
-        "push",
-        `--force-with-lease=refs/heads/main:${publicBase}`,
-        "origin",
-        `${publicRelease}:refs/heads/main`,
-      ],
-      { cwd: publicDirectory, env: publicGitEnvironment() },
-    );
-  }
-  const privateMain = await remoteRefSha(repoRoot, "origin", "refs/heads/main");
-  assert(privateMain === expectedPrivateMain, "Private main did not advance.");
   assert(
-    (await remoteRefSha(publicDirectory, "origin", "refs/heads/main", {
-      env: publicGitEnvironment(),
-    })) === publicRelease,
-    "Public main did not advance.",
+    (await output("git", ["rev-parse", "HEAD"], { cwd: releaseDirectory })) ===
+      releaseCommit,
+    "Release staging clone did not check out the release commit.",
   );
-  return publicRelease;
+  assert(
+    !(await output("git", ["status", "--porcelain", "--untracked-files=all"], {
+      cwd: releaseDirectory,
+    })),
+    "Release staging clone is dirty.",
+  );
+}
+
+async function buildAndTestReleaseTree() {
+  await run("npm", ["ci"], { cwd: releaseDirectory });
+  await run("npm", ["run", "build"], { cwd: releaseDirectory });
+  await run("npm", ["run", "test"], { cwd: releaseDirectory });
+}
+
+async function pushReleaseCommit({ releaseBase, releaseCommit, expectedMain }) {
+  const currentMain = await remoteRefSha(repoRoot, "origin", "refs/heads/main");
+  if (currentMain !== expectedMain) {
+    assert(
+      expectedMain === releaseCommit && currentMain === releaseBase,
+      "Main moved while preparing the release.",
+    );
+    await run("git", ["push", "origin", `${releaseCommit}:refs/heads/main`]);
+  }
+  assert(
+    (await remoteRefSha(repoRoot, "origin", "refs/heads/main")) ===
+      expectedMain,
+    "Main did not advance to the release commit.",
+  );
+  return releaseCommit;
 }
 
 export function parseImageDigest(inspectOutput, repository) {
@@ -1026,6 +592,17 @@ async function inspectImage(repository, tag) {
   return inspected.ok ? parseImageDigest(inspected.output, repository) : null;
 }
 
+export function workflowRunIdFromDispatchOutput(value) {
+  const match = new RegExp(
+    `https://github\\.com/${publicRepository}/actions/runs/(\\d+)`,
+  ).exec(String(value ?? ""));
+  assert(
+    match,
+    "GitHub CLI did not return the dispatched workflow run URL; version 2.87.0 or newer is required.",
+  );
+  return match[1];
+}
+
 export function canReuseReleaseImages({
   sandboxImage,
   scmImage,
@@ -1038,7 +615,7 @@ export function requiresSandboxBaseRebuild(changedFiles = []) {
   return changedFiles.some((pathname) => sandboxBaseBuildInputs.has(pathname));
 }
 
-async function hasSuccessfulImageRun(releaseId, requestId) {
+async function hasSuccessfulImageRun(requestId) {
   const displayTitle = `Container images ${requestId}`;
   const runs = JSON.parse(
     await output("gh", [
@@ -1049,22 +626,19 @@ async function hasSuccessfulImageRun(releaseId, requestId) {
       "--workflow",
       "container-image.yml",
       "--json",
-      "conclusion,displayTitle,headSha",
+      "conclusion,displayTitle",
       "--limit",
       "100",
     ]),
   );
   return runs.some(
     (entry) =>
-      entry.headSha === releaseId &&
-      entry.displayTitle === displayTitle &&
-      entry.conclusion === "success",
+      entry.displayTitle === displayTitle && entry.conclusion === "success",
   );
 }
 
 async function buildReleaseImages({ releaseId, changedFiles }) {
   const requestId = `release-${releaseId}`;
-  const displayTitle = `Container images ${requestId}`;
   const [existingSandbox, existingScm, existingBase] = await Promise.all([
     inspectImage(sandboxRepository, releaseId),
     inspectImage(scmRepository, releaseId),
@@ -1074,7 +648,7 @@ async function buildReleaseImages({ releaseId, changedFiles }) {
     canReuseReleaseImages({
       sandboxImage: existingSandbox,
       scmImage: existingScm,
-      successfulRun: await hasSuccessfulImageRun(releaseId, requestId),
+      successfulRun: await hasSuccessfulImageRun(requestId),
     })
   ) {
     return {
@@ -1086,50 +660,27 @@ async function buildReleaseImages({ releaseId, changedFiles }) {
   }
 
   const rebuildBase = requiresSandboxBaseRebuild(changedFiles);
-  await run("gh", [
-    "workflow",
-    "run",
-    "container-image.yml",
-    "--repo",
-    publicRepository,
-    "--ref",
-    "main",
-    "-f",
-    `image_tag=${releaseCandidateImageTag}`,
-    "-f",
-    `rebuild_base=${rebuildBase ? "true" : "false"}`,
-    "-f",
-    `request_id=${requestId}`,
-    "-f",
-    `source_revision=${releaseId}`,
-    "-f",
-    `image_revision=${releaseId}`,
-  ]);
-  let runId = "";
-  for (let attempt = 0; attempt < 60 && !runId; attempt += 1) {
-    const runs = JSON.parse(
-      await output("gh", [
-        "run",
-        "list",
-        "--repo",
-        publicRepository,
-        "--workflow",
-        "container-image.yml",
-        "--json",
-        "databaseId,displayTitle,headSha",
-        "--limit",
-        "20",
-      ]),
-    );
-    runId = String(
-      runs.find(
-        (entry) =>
-          entry.headSha === releaseId && entry.displayTitle === displayTitle,
-      )?.databaseId ?? "",
-    );
-    if (!runId) await new Promise((resolve) => setTimeout(resolve, 2_000));
-  }
-  assert(runId, "Container image workflow was not found.");
+  const runId = workflowRunIdFromDispatchOutput(
+    await output("gh", [
+      "workflow",
+      "run",
+      "container-image.yml",
+      "--repo",
+      publicRepository,
+      "--ref",
+      "main",
+      "-f",
+      `image_tag=${releaseCandidateImageTag}`,
+      "-f",
+      `rebuild_base=${rebuildBase ? "true" : "false"}`,
+      "-f",
+      `request_id=${requestId}`,
+      "-f",
+      `source_revision=${releaseId}`,
+      "-f",
+      `image_revision=${releaseId}`,
+    ]),
+  );
   await run("gh", [
     "run",
     "watch",
@@ -1187,8 +738,8 @@ async function promoteStableImages(images) {
   }
 }
 
-async function packageHubBundle(version, forbiddenShas) {
-  const hubDirectory = path.join(publicDirectory, "packages", "hub");
+async function packageHubBundle(version) {
+  const hubDirectory = path.join(releaseDirectory, "packages", "hub");
   const staging = path.join(artifactsDirectory, "hub-bundle");
   await rm(staging, { recursive: true, force: true });
   await mkdir(path.join(staging, "worker"), { recursive: true });
@@ -1211,7 +762,6 @@ async function packageHubBundle(version, forbiddenShas) {
     path.join(hubDirectory, "manifest.json"),
     path.join(staging, "manifest.json"),
   );
-  await assertNoForbiddenText({ directory: staging, forbidden: forbiddenShas });
   const bundlePath = path.join(artifactsDirectory, releaseBundleName(version));
   await run(
     "tar",
@@ -1237,7 +787,7 @@ async function packageHubBundle(version, forbiddenShas) {
 async function packNpmWorkspace(workspace) {
   const workspaceDirectory = RELEASE_WORKSPACES[workspace].workspace;
   const pkg = await readJson(
-    path.join(publicDirectory, workspaceDirectory, "package.json"),
+    path.join(releaseDirectory, workspaceDirectory, "package.json"),
   );
   const packed = JSON.parse(
     await output(
@@ -1250,7 +800,7 @@ async function packNpmWorkspace(workspace) {
         artifactsDirectory,
         "--json",
       ],
-      { cwd: publicDirectory },
+      { cwd: releaseDirectory },
     ),
   );
   assert(
@@ -1275,15 +825,10 @@ async function packNpmWorkspace(workspace) {
   return path.join(artifactsDirectory, filename);
 }
 
-async function buildReleaseArtifacts({
-  plan,
-  releaseId,
-  images,
-  forbiddenShas = [],
-}) {
+async function buildReleaseArtifacts({ plan, releaseId, images }) {
   await mkdir(artifactsDirectory, { recursive: true });
   const version = plan.targetVersions.hub;
-  const hubDirectory = path.join(publicDirectory, "packages", "hub");
+  const hubDirectory = path.join(releaseDirectory, "packages", "hub");
   const buildEnv = {
     ...process.env,
     GITHUB_REF_NAME: "main",
@@ -1303,14 +848,14 @@ async function buildReleaseArtifacts({
     TILLER_MANIFEST_REQUIRE_PINNED_IMAGES: "1",
   };
   await run("npm", ["run", "build", "--workspace", "packages/hub"], {
-    cwd: publicDirectory,
+    cwd: releaseDirectory,
     env: buildEnv,
   });
   await run("node", ["scripts/generate-manifest.mjs"], {
     cwd: hubDirectory,
     env: buildEnv,
   });
-  const bundlePath = await packageHubBundle(version, forbiddenShas);
+  const bundlePath = await packageHubBundle(version);
   const descriptorPath = path.join(artifactsDirectory, descriptorAssetName);
   const descriptor = await buildReleaseDescriptor({
     releaseId,
@@ -1552,7 +1097,7 @@ async function deployInstaller(descriptorPath) {
     // Continue with deployment when stable is older or temporarily unavailable.
   }
   const installerDirectory = path.join(
-    publicDirectory,
+    releaseDirectory,
     "packages",
     "installer",
   );
@@ -1596,29 +1141,29 @@ async function deployInstaller(descriptorPath) {
   }
 }
 
-async function moveStableRef(privateRelease, expectedStable) {
+async function moveStableRef(releaseCommit, expectedStable) {
   const current = await remoteRefSha(repoRoot, "origin", stableRef);
-  if (current === privateRelease) return;
+  if (current === releaseCommit) return;
   assert(
     current === expectedStable,
     "tiller-release/stable moved during the release.",
   );
-  await run("git", ["push", "origin", `${privateRelease}:${stableRef}`]);
+  await run("git", ["push", "origin", `${releaseCommit}:${stableRef}`]);
   assert(
-    (await remoteRefSha(repoRoot, "origin", stableRef)) === privateRelease,
+    (await remoteRefSha(repoRoot, "origin", stableRef)) === releaseCommit,
     "tiller-release/stable did not advance.",
   );
 }
 
-async function release({ bump = "patch", resetPublicHistory = false } = {}) {
-  const privateHead = await requireCleanPrivateMain();
+async function release({ bump = "patch" } = {}) {
+  const releaseHead = await requireCleanReleaseMain();
   const stableBase = await fetchStableBase();
-  const pending = await pendingReleaseAtHead(privateHead, stableBase);
-  const privateBase = pending?.privateBase ?? privateHead;
+  const pending = await pendingReleaseAtHead(releaseHead, stableBase);
+  const releaseBase = pending?.releaseBase ?? releaseHead;
   const [changedFiles, versions] = await Promise.all([
-    changedFilesSinceStable(stableBase, privateBase),
+    changedFilesSinceStable(stableBase, releaseBase),
     pending
-      ? readWorkspaceVersionsAtRef(repoRoot, privateBase)
+      ? readWorkspaceVersionsAtRef(repoRoot, releaseBase)
       : readWorkspaceVersions(repoRoot),
   ]);
   const releaseBump = pending
@@ -1638,18 +1183,13 @@ async function release({ bump = "patch", resetPublicHistory = false } = {}) {
     forceCli,
     versions,
   });
-  assertPublicHistoryResetPlan({
-    resetPublicHistory,
-    bump: releaseBump,
-    plan,
-  });
   if (forceCli) {
     process.stdout.write(
       `Current CLI ${versions.tiller} is deprecated; including the CLI in ${plan.releaseVersion}.\n`,
     );
   }
-  let privateRelease;
-  let expectedPrivateMain = privateHead;
+  let releaseCommit;
+  let expectedMain = releaseHead;
   if (pending) {
     assert(
       pending.releaseVersion === plan.releaseVersion,
@@ -1659,7 +1199,7 @@ async function release({ bump = "patch", resetPublicHistory = false } = {}) {
       sameVersions(await readWorkspaceVersions(repoRoot), plan.targetVersions),
       "Pending release workspace versions do not match the release plan.",
     );
-    privateRelease = pending.privateRelease;
+    releaseCommit = pending.releaseCommit;
   }
 
   await preflightReleaseAccess();
@@ -1667,22 +1207,16 @@ async function release({ bump = "patch", resetPublicHistory = false } = {}) {
   await rm(releaseRoot, { recursive: true, force: true });
   await mkdir(releaseRoot, { recursive: true });
 
-  if (!privateRelease) {
-    privateRelease = await commitPrivateRelease(plan);
-    expectedPrivateMain = privateRelease;
+  if (!releaseCommit) {
+    releaseCommit = await commitRelease(plan);
+    expectedMain = releaseCommit;
   }
-  const snapshot = await exportPublicSnapshot({
-    privateBase,
-    privateRelease,
-    resetPublicHistory,
-  });
-  await buildAndTestPublicTree();
-  const releaseId = await pushReleaseCommits({
-    privateBase,
-    privateRelease,
-    expectedPrivateMain,
-    publicBase: snapshot.publicBase,
-    publicRelease: snapshot.releaseId,
+  await prepareReleaseTree(releaseCommit);
+  await buildAndTestReleaseTree();
+  const releaseId = await pushReleaseCommit({
+    releaseBase,
+    releaseCommit,
+    expectedMain,
   });
 
   const images = await buildReleaseImages({
@@ -1693,7 +1227,6 @@ async function release({ bump = "patch", resetPublicHistory = false } = {}) {
     plan,
     releaseId,
     images,
-    forbiddenShas: [privateBase, privateRelease],
   });
   await publishHubRelease({ plan, releaseId, artifacts });
   await publishNpmPackages(plan, artifacts.npmTarballs);
@@ -1701,18 +1234,16 @@ async function release({ bump = "patch", resetPublicHistory = false } = {}) {
   await promoteStableImages(images);
   await promoteNpmPackages(plan);
   await promoteHubRelease(plan);
-  await moveStableRef(privateRelease, stableBase);
+  await moveStableRef(releaseCommit, stableBase);
 
   process.stdout.write(
-    `Released monorepo v${plan.releaseVersion} from public snapshot ${releaseId}.\n`,
+    `Released monorepo v${plan.releaseVersion} from public commit ${releaseId}.\n`,
   );
 }
 
 async function main() {
   await release({
     bump: parseReleaseBump(process.argv.slice(2)),
-    resetPublicHistory:
-      process.env.TILLER_RESET_PUBLIC_HISTORY?.trim().toLowerCase() === "true",
   });
 }
 
